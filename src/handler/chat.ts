@@ -116,33 +116,34 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       lastText ||
       (Date.now() - start >= timeout ? "⚠️ 响应超时" : "[无回复]")
 
-    if (placeholderId) {
-      try {
-        await sender.updateMessage(feishuClient, placeholderId, finalText)
-      } catch {
-        await sender.sendTextMessage(feishuClient, chatId, finalText)
-      }
-    } else {
-      await sender.sendTextMessage(feishuClient, chatId, finalText)
-    }
+    await replyOrUpdate(feishuClient, chatId, placeholderId, finalText)
   } catch (err) {
     log("error", "对话处理失败", {
       error: err instanceof Error ? err.message : String(err),
     })
     const msg = "❌ " + (err instanceof Error ? err.message : String(err))
-    if (placeholderId) {
-      try {
-        await sender.updateMessage(feishuClient, placeholderId, msg)
-      } catch {
-        await sender.sendTextMessage(feishuClient, chatId, msg)
-      }
-    } else {
-      await sender.sendTextMessage(feishuClient, chatId, msg)
-    }
+    await replyOrUpdate(feishuClient, chatId, placeholderId, msg)
   } finally {
     done = true
     if (timer) clearTimeout(timer)
     unregisterPending(session.id)
+  }
+}
+
+async function replyOrUpdate(
+  feishuClient: InstanceType<typeof Lark.Client>,
+  chatId: string,
+  placeholderId: string,
+  text: string,
+): Promise<void> {
+  if (placeholderId) {
+    try {
+      await sender.updateMessage(feishuClient, placeholderId, text)
+    } catch {
+      await sender.sendTextMessage(feishuClient, chatId, text)
+    }
+  } else {
+    await sender.sendTextMessage(feishuClient, chatId, text)
   }
 }
 

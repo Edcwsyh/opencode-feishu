@@ -14,14 +14,13 @@ export interface FeishuMessageContext {
 }
 
 /**
- * 插件配置（从 ~/.config/opencode/plugin/feishu.json 读取）
+ * 插件配置（从 ~/.config/opencode/plugins/feishu.json 读取）
  */
 export interface FeishuPluginConfig {
   appId: string
   appSecret: string
   timeout?: number
   thinkingDelay?: number
-  proxy?: string
 }
 
 /**

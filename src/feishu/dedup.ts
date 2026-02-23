@@ -19,7 +19,3 @@ export function isDuplicate(messageId: string | undefined | null): boolean {
   return false;
 }
 
-/** 清空去重状态（测试用） */
-export function clearDedup(): void {
-  seen.clear();
-}

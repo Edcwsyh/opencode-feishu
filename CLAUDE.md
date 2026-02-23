@@ -54,15 +54,16 @@ npm run build
 $source = Get-Location
 $target = "$env:USERPROFILE\.config\opencode\plugins\opencode-feishu"
 New-Item -ItemType Junction -Path $target -Target $source
+```
 
-# 在 opencode.json 中配置
-# {
-#   "plugin": ["opencode-feishu"],
-#   "feishu": {
-#     "appId": "cli_xxxxxxxxxxxx",
-#     "appSecret": "your_secret"
-#   }
-# }
+在 `opencode.json` 中声明插件：
+```json
+{ "plugin": ["opencode-feishu"] }
+```
+
+创建飞书配置文件 `~/.config/opencode/plugins/feishu.json`：
+```json
+{ "appId": "cli_xxxxxxxxxxxx", "appSecret": "your_secret" }
 ```
 
 ## 架构设计
@@ -122,25 +123,25 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 
 ## 配置
 
-### 在 OpenCode 配置文件中配置
+### 配置文件
+
+**1. OpenCode 插件声明**（`~/.config/opencode/opencode.json`）：
 ```json
-// ~/.config/opencode/opencode.json
+{ "plugin": ["opencode-feishu"] }
+```
+
+**2. 飞书配置**（`~/.config/opencode/plugins/feishu.json`）：
+```json
 {
-  "plugin": ["opencode-feishu"],
-  "feishu": {
-    "appId": "cli_xxxxxxxxxxxx",
-    "appSecret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "timeout": 120000,
-    "thinkingDelay": 2500,
-    "enableStreaming": true,
-    "reconnectDelay": 5000,
-    "dedupWindow": 600000
-  }
+  "appId": "cli_xxxxxxxxxxxx",
+  "appSecret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "timeout": 120000,
+  "thinkingDelay": 2500
 }
 ```
 
-必需字段：`feishu.appId`, `feishu.appSecret`
-可选字段均有默认值（见上）。
+必需字段：`appId`, `appSecret`
+可选字段：`timeout`（默认 120000ms）、`thinkingDelay`（默认 2500ms）
 
 ## 群聊行为
 
@@ -151,7 +152,7 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 
 ### @提及检测
 - 需要 bot 的 `open_id`（通过 `/open-apis/bot/v3/info` 获取）
-- 获取失败时使用回退模式：任何 @提及都触发回复
+- 获取失败时直接抛出错误，阻止插件启动（严格模式）
 - 检测逻辑在 `src/feishu/group-filter.ts`
 
 ### 入群历史摄入
@@ -193,7 +194,7 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 
 ## 错误处理
 
-- `open_id` 获取失败：回退到宽松的 @提及检测（记录警告）
+- `open_id` 获取失败：直接抛出错误，阻止插件启动
 - 提示超时：`timeout` 后返回"⚠️ 响应超时"
 - 消息去重：10 分钟窗口防止重复处理
 - 飞书消息发送失败：尽力更新占位消息，回退到发送新消息
@@ -202,10 +203,10 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 
 ## 日志记录
 
-- 通过 `client.app.log()` 输出到 OpenCode 日志系统
+- 通过 `client.app.log()` 输出到 OpenCode 日志系统（唯一日志输出方式）
 - 服务标识："opencode-feishu"
 - 级别：info、warn、error
-- fallback：OpenCode 日志不可用时降级到 console
+- 日志调用使用 `.catch(() => {})` 静默处理失败（防止 Unhandled Promise Rejection）
 
 ## 常见开发场景
 
