@@ -10,6 +10,7 @@ import { startFeishuGateway, type FeishuGatewayResult } from "./feishu/gateway.j
 import { handleChat } from "./handler/chat.js"
 import { handleEvent } from "./handler/event.js"
 import { ingestGroupHistory } from "./feishu/history.js"
+import { initDedup } from "./feishu/dedup.js"
 
 const SERVICE_NAME = "opencode-feishu"
 const isDebug = !!process.env.FEISHU_DEBUG
@@ -18,6 +19,10 @@ const DEFAULT_CONFIG: Omit<ResolvedConfig, "appId" | "appSecret"> = {
   timeout: 120_000,
   thinkingDelay: 2_500,
   logLevel: "info",
+  maxHistoryMessages: 200,
+  pollInterval: 1_000,
+  stablePolls: 3,
+  dedupTtl: 10 * 60 * 1_000,
 }
 
 export const FeishuPlugin: Plugin = async (ctx) => {
@@ -66,7 +71,14 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     timeout: feishuRaw.timeout ?? DEFAULT_CONFIG.timeout,
     thinkingDelay: feishuRaw.thinkingDelay ?? DEFAULT_CONFIG.thinkingDelay,
     logLevel: feishuRaw.logLevel ?? DEFAULT_CONFIG.logLevel,
+    maxHistoryMessages: feishuRaw.maxHistoryMessages ?? DEFAULT_CONFIG.maxHistoryMessages,
+    pollInterval: feishuRaw.pollInterval ?? DEFAULT_CONFIG.pollInterval,
+    stablePolls: feishuRaw.stablePolls ?? DEFAULT_CONFIG.stablePolls,
+    dedupTtl: feishuRaw.dedupTtl ?? DEFAULT_CONFIG.dedupTtl,
   }
+
+  // 初始化去重缓存
+  initDedup(resolvedConfig.dedupTtl)
 
   // 获取 bot open_id（用于群聊 @提及检测）
   const botOpenId = await fetchBotOpenId(resolvedConfig.appId, resolvedConfig.appSecret, log)
@@ -88,7 +100,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     onBotAdded: (chatId) => {
       if (!gateway) return
       ingestGroupHistory(gateway.client, client, chatId, {
-        maxMessages: 50,
+        maxMessages: resolvedConfig.maxHistoryMessages,
         log,
       }).catch((err) => {
         log("error", "群聊历史摄入失败", {

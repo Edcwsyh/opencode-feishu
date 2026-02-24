@@ -8,8 +8,6 @@ import { registerPending, unregisterPending } from "./event.js"
 import { buildSessionKey, getOrCreateSession } from "../session.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 
-const POLL_INTERVAL_MS = 1500
-const STABLE_POLLS = 2
 
 export interface ChatDeps {
   config: ResolvedConfig
@@ -20,7 +18,7 @@ export interface ChatDeps {
 }
 
 export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Promise<void> {
-  const { content, chatId, chatType, senderId, shouldReply } = ctx
+  const { content, chatId, chatType, senderId, createTime, shouldReply } = ctx
   if (!content.trim()) return
 
   const { config, client, feishuClient, log, directory } = deps
@@ -29,10 +27,17 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   const sessionKey = buildSessionKey(chatType, chatType === "p2p" ? senderId : chatId)
   const session = await getOrCreateSession(client, sessionKey, directory)
 
-  // 群聊消息添加发送者身份前缀
+  // 构建带时间戳和发送者信息的 prompt
+  const timeStr = createTime
+    ? new Date(Number(createTime)).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })
+    : ""
   let promptContent = content
   if (chatType === "group" && senderId) {
-    promptContent = `[${senderId}]: ${content}`
+    promptContent = timeStr
+      ? `[${timeStr}] [${senderId}]: ${content}`
+      : `[${senderId}]: ${content}`
+  } else if (timeStr) {
+    promptContent = `[${timeStr}] ${content}`
   }
 
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
@@ -56,6 +61,8 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
   const timeout = config.timeout
   const thinkingDelay = config.thinkingDelay
+  const pollInterval = config.pollInterval
+  const stablePolls = config.stablePolls
 
   let placeholderId = ""
   let done = false
@@ -90,7 +97,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     let sameCount = 0
 
     while (Date.now() - start < timeout) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+      await new Promise((r) => setTimeout(r, pollInterval))
       const { data: messages } = await client.session.messages({ path: { id: session.id }, query })
       const text = extractLastAssistantText(messages ?? [])
 
@@ -106,7 +113,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         }
       } else if (text && text.length > 0) {
         sameCount++
-        if (sameCount >= STABLE_POLLS) break
+        if (sameCount >= stablePolls) break
       }
     }
 

@@ -13,7 +13,6 @@ interface HistoryMessage {
   createTime: string
 }
 
-const DEFAULT_MAX_MESSAGES = 50
 const DEFAULT_PAGE_SIZE = 50
 
 /**
@@ -24,11 +23,11 @@ export async function ingestGroupHistory(
   opencodeClient: OpencodeClient,
   chatId: string,
   options: {
-    maxMessages?: number
+    maxMessages: number
     log: LogFn
   },
 ): Promise<void> {
-  const { maxMessages = DEFAULT_MAX_MESSAGES, log } = options
+  const { maxMessages, log } = options
 
   log("info", "开始摄入群聊历史上下文", { chatId, maxMessages })
 

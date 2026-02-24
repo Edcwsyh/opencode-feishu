@@ -1,6 +1,6 @@
 {
   "name": "opencode-feishu",
-  "version": "0.3.1",
+  "version": "0.3.4",
   "description": "OpenCode 飞书插件 — 通过飞书 WebSocket 长连接接入 OpenCode AI 对话",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.56.1",
-    "proxy-agent": "^6.5.0"
+    "https-proxy-agent": "^7.0.6"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.1.0"

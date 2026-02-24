@@ -2,7 +2,8 @@
  * 飞书 WebSocket 长连接：接收消息并回调
  */
 import * as Lark from "@larksuiteoapi/node-sdk"
-import { ProxyAgent } from "proxy-agent"
+import { HttpsProxyAgent } from "https-proxy-agent"
+import type { Agent } from "node:https"
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import { isDuplicate } from "./dedup.js"
 import { isBotMentioned } from "./group-filter.js"
@@ -34,8 +35,9 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
     process.env.ALL_PROXY ||
     ""
 
-  const wsAgent = new ProxyAgent()
+  let wsAgent: Agent | undefined
   if (proxyUrl) {
+    wsAgent = new HttpsProxyAgent(proxyUrl)
     log("info", "WS proxy enabled", { proxy: proxyUrl })
   }
 
@@ -97,6 +99,7 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
         const sender = (data as { sender?: { sender_id?: { open_id?: string } } }).sender
         const senderId = sender?.sender_id?.open_id ?? ""
         const rootId = message.root_id as string | undefined
+        const createTime = message.create_time as string | undefined
 
         const ctx: FeishuMessageContext = {
           chatId: String(chatId),
@@ -106,6 +109,7 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
           chatType,
           senderId,
           rootId,
+          createTime,
           shouldReply,
         }
 
@@ -150,7 +154,7 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
 
   const wsClient = new Lark.WSClient({
     ...sdkConfig,
-    agent: wsAgent,
+    ...(wsAgent ? { agent: wsAgent } : {}),
     loggerLevel: logLevelMap[config.logLevel] ?? Lark.LoggerLevel.info,
     logger: {
       error: (...msg: unknown[]) => log("error", "[lark.ws]", { msg }),
