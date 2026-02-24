@@ -292,6 +292,21 @@ npm run dev
 npm run typecheck
 ```
 
+### 发布
+
+```bash
+# 一键版本发布（交互式选择 patch/minor/major，自动 commit + tag + push）
+npm run release
+
+# 手动发布（prepublishOnly 自动执行构建+类型检查）
+npm publish
+
+# 干运行：查看将要发布的文件（不实际发布）
+npm publish --dry-run
+```
+
+推送 `v*` tag 后 GitHub Actions 自动发布到 npm（需在 GitHub 仓库 Settings > Secrets 中配置 `NPM_TOKEN`）。
+
 ### 开发流程
 
 1. 修改 `src/` 下的源文件

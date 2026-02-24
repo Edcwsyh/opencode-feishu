@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 本文件为 Claude Code (claude.ai/code) 在此代码仓库中工作时提供指导。
 
@@ -44,6 +44,22 @@ npm run dev
 # 仅类型检查
 npm run typecheck
 ```
+
+### 发布
+```bash
+# 一键版本发布（交互式选择 patch/minor/major，自动 commit + tag + push）
+npm run release
+
+# 手动发布（prepublishOnly 自动执行构建+类型检查）
+npm publish
+
+# 干运行：查看将要发布的文件（不实际发布）
+npm publish --dry-run
+```
+
+- `prepublishOnly` 脚本确保每次 `npm publish` 前自动运行 `build` 和 `typecheck`
+- `npm run release` 使用 bumpp 交互式选择版本，自动更新 package.json、创建 git commit 和 tag、推送到远程
+- 推送 `v*` tag 后 GitHub Actions 自动发布到 npm（需在 GitHub Secrets 中配置 `NPM_TOKEN`）
 
 ### 本地调试
 ```bash
