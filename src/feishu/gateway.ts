@@ -6,6 +6,7 @@ import { HttpsProxyAgent } from "https-proxy-agent"
 import type { Agent } from "node:https"
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import { isDuplicate } from "./dedup.js"
+import { describeMessageType } from "./content-extractor.js"
 import { isBotMentioned } from "./group-filter.js"
 
 export interface FeishuGatewayOptions {
@@ -66,22 +67,20 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
         if (isDuplicate(messageId)) return
 
         const messageType = (message.message_type as string) ?? "text"
+        const rawContent = (message.content as string) ?? ""
         log("info", "飞书消息元信息", {
           chatId,
           messageId: messageId ?? "",
           messageType,
-          hasContent: !!message.content,
+          hasContent: !!rawContent,
         })
-        if (messageType !== "text" || !message.content) return
+        if (!rawContent) return
 
-        let text: string
-        try {
-          const parsed = JSON.parse(message.content as string) as { text?: string }
-          text = (parsed.text ?? "").trim()
-        } catch {
-          return
+        // 提取文本内容（用于 @提及清理和空消息过滤）
+        let text = describeMessageType(messageType, rawContent)
+        if (messageType === "text") {
+          text = text.replace(/@_user_\d+\s*/g, "").trim()
         }
-        text = text.replace(/@_user_\d+\s*/g, "").trim()
         if (!text) return
 
         const chatType = (message.chat_type as string) === "group" ? "group" : "p2p"
@@ -106,6 +105,7 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
           messageId: messageId ?? "",
           messageType,
           content: text,
+          rawContent,
           chatType,
           senderId,
           rootId,

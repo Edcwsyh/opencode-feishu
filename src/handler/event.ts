@@ -43,13 +43,22 @@ export async function handleEvent(
       const payload = pendingBySession.get(sessionId)
       if (!payload) break
 
-      const added = extractPartText(part)
-      if (added) {
-        payload.textBuffer += added
-        try {
-          await sender.updateMessage(payload.feishuClient, payload.placeholderId, payload.textBuffer.trim())
-        } catch {
-          // best-effort
+      // delta 是增量文本，part.text 是全量文本
+      const delta = (event.properties as { delta?: string }).delta
+      if (delta) {
+        payload.textBuffer += delta
+      } else {
+        // 无 delta 时用全量文本替换（而非追加，避免文本重复）
+        const fullText = extractPartText(part)
+        if (fullText) {
+          payload.textBuffer = fullText
+        }
+      }
+
+      if (payload.textBuffer) {
+        const res = await sender.updateMessage(payload.feishuClient, payload.placeholderId, payload.textBuffer.trim())
+        if (!res.ok) {
+          // best-effort: 更新失败不阻塞
         }
       }
       break
@@ -63,9 +72,8 @@ export async function handleEvent(
       if (!payload) break
 
       const errMsg = (props.error as Record<string, unknown>)?.message ?? String(props.error)
-      try {
-        await sender.updateMessage(payload.feishuClient, payload.placeholderId, `❌ 会话错误: ${errMsg}`)
-      } catch {
+      const updateRes = await sender.updateMessage(payload.feishuClient, payload.placeholderId, `❌ 会话错误: ${errMsg}`)
+      if (!updateRes.ok) {
         await sender.sendTextMessage(payload.feishuClient, payload.chatId, `❌ 会话错误: ${errMsg}`)
       }
       break
