@@ -66,9 +66,10 @@ export const FeishuPlugin: Plugin = async (ctx) => {
   }
 
   if (feishuRaw.directory !== undefined && typeof feishuRaw.directory !== "string") {
-    throw new Error(
-      `飞书配置错误：${configPath} 中的 'directory' 必须是字符串`,
-    )
+    log("warn", `飞书配置警告：${configPath} 中的 'directory' 必须是字符串，已忽略`, {
+      actualType: typeof feishuRaw.directory,
+    })
+    feishuRaw.directory = undefined
   }
 
   if (!feishuRaw.appId || !feishuRaw.appSecret) {
@@ -87,7 +88,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     pollInterval: feishuRaw.pollInterval ?? DEFAULT_CONFIG.pollInterval,
     stablePolls: feishuRaw.stablePolls ?? DEFAULT_CONFIG.stablePolls,
     dedupTtl: feishuRaw.dedupTtl ?? DEFAULT_CONFIG.dedupTtl,
-    directory: feishuRaw.directory ?? ctx.directory ?? DEFAULT_CONFIG.directory,
+    directory: expandDirectoryPath(feishuRaw.directory ?? ctx.directory ?? DEFAULT_CONFIG.directory),
   }
 
   // 初始化去重缓存
@@ -138,6 +139,27 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     },
   }
   return hooks
+}
+
+/**
+ * 展开 directory 路径中的环境变量和 ~ 前缀。
+ * 支持 ${VAR} 和 ~ 两种语法。
+ */
+function expandDirectoryPath(dir: string): string {
+  if (!dir) return dir
+  // 展开 ~ 为用户主目录
+  if (dir.startsWith("~")) {
+    dir = join(homedir(), dir.slice(1))
+  }
+  // 展开 ${VAR} 环境变量（不支持 $VAR 无花括号语法，避免与路径中 $ 字符歧义）
+  dir = dir.replace(/\$\{(\w+)\}/g, (_match, name: string) => {
+    const val = process.env[name]
+    if (val === undefined) {
+      throw new Error(`环境变量 ${name} 未设置（directory 引用了 \${${name}}）`)
+    }
+    return val
+  })
+  return dir
 }
 
 /**
