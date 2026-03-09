@@ -2,8 +2,11 @@
  * OpenCode 事件处理：通过插件 event 钩子接收事件，更新飞书占位消息
  */
 import type { Event } from "@opencode-ai/sdk"
+import type { OpencodeClient } from "@opencode-ai/sdk"
 
 import * as sender from "../feishu/sender.js"
+import { invalidateCachedSession, setCachedSession, forkSession } from "../session.js"
+import type { LogFn } from "../types.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 
 export interface PendingReplyPayload {
@@ -13,26 +16,13 @@ export interface PendingReplyPayload {
   textBuffer: string
 }
 
+export interface EventDeps {
+  client: OpencodeClient
+  log: LogFn
+  directory: string
+}
+
 const pendingBySession = new Map<string, PendingReplyPayload>()
-
-/**
- * 会话级别的模型不兼容错误追踪
- * session.error 事件携带真实的 ProviderModelNotFoundError 信息，
- * 在 prompt HTTP 响应（JSON Parse error）之前到达
- */
-const sessionErrors = new Map<string, string>()
-
-export function trackSessionError(sessionId: string, error: string): void {
-  if (error.includes("ModelNotFound") || error.includes("ProviderModelNotFound")) {
-    sessionErrors.set(sessionId, error)
-  }
-}
-
-export function consumeSessionError(sessionId: string): string | undefined {
-  const err = sessionErrors.get(sessionId)
-  if (err) sessionErrors.delete(sessionId)
-  return err
-}
 
 export function registerPending(
   sessionId: string,
@@ -46,10 +36,29 @@ export function unregisterPending(sessionId: string): void {
 }
 
 /**
+ * 迁移 pending 占位消息到新 session（fork 后旧 sessionId → 新 sessionId）
+ */
+function migratePending(oldSessionId: string, newSessionId: string): void {
+  const payload = pendingBySession.get(oldSessionId)
+  if (payload) {
+    pendingBySession.delete(oldSessionId)
+    pendingBySession.set(newSessionId, payload)
+  }
+}
+
+/**
+ * 检测错误消息是否为模型不兼容错误
+ */
+function isModelError(errMsg: string): boolean {
+  return errMsg.includes("ModelNotFound") || errMsg.includes("ProviderModelNotFound")
+}
+
+/**
  * 处理 OpenCode 事件（由插件 event 钩子调用）
  */
 export async function handleEvent(
   event: Event,
+  deps: EventDeps,
 ): Promise<void> {
   switch (event.type) {
     case "message.part.updated": {
@@ -89,9 +98,32 @@ export async function handleEvent(
 
       const errMsg = ((props.error as Record<string, unknown>)?.message ?? String(props.error)) as string
 
-      // 追踪模型不兼容错误，供 promptWithForkRecovery 查询
-      trackSessionError(sessionId, errMsg)
+      // 模型不兼容错误：主动 fork 会话，更新缓存
+      if (isModelError(errMsg)) {
+        const sessionKey = invalidateCachedSession(sessionId)
+        if (sessionKey) {
+          try {
+            const newSession = await forkSession(deps.client, sessionId, sessionKey, deps.directory)
+            setCachedSession(sessionKey, newSession)
+            deps.log("warn", "模型不兼容，已主动 fork 会话", {
+              oldSessionId: sessionId,
+              newSessionId: newSession.id,
+              sessionKey,
+            })
 
+            // 迁移 pending（如果有占位消息在旧 session 上）
+            migratePending(sessionId, newSession.id)
+          } catch (forkErr) {
+            deps.log("error", "主动 fork 失败", {
+              sessionId,
+              sessionKey,
+              error: forkErr instanceof Error ? forkErr.message : String(forkErr),
+            })
+          }
+        }
+      }
+
+      // 仍然向飞书发送错误提示（当前 prompt 已失败）
       const payload = pendingBySession.get(sessionId)
       if (!payload) break
 
