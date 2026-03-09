@@ -5,7 +5,7 @@ import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
 import { registerPending, unregisterPending } from "./event.js"
-import { buildSessionKey, getOrCreateSession, setCachedSession } from "../session.js"
+import { buildSessionKey, getOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 
@@ -38,7 +38,6 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   }
 
   const session = await getOrCreateSession(client, sessionKey, directory)
-  setCachedSession(sessionKey, session)
 
   // 提取消息内容为 OpenCode parts
   const parts = await buildPromptParts(feishuClient, messageId, messageType, rawContent, content, chatType, senderId, log)

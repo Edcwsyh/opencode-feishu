@@ -11,27 +11,32 @@ const TITLE_PREFIX = "Feishu"
  * 避免每次 prompt 都查 API；event.ts 中主动 fork 后更新缓存
  */
 const sessionCache = new Map<string, { id: string; title?: string }>()
+const sessionIdToKeyCache = new Map<string, string>()
 
 export function getCachedSession(sessionKey: string): { id: string; title?: string } | undefined {
   return sessionCache.get(sessionKey)
 }
 
 export function setCachedSession(sessionKey: string, session: { id: string; title?: string }): void {
+  const oldSession = sessionCache.get(sessionKey)
+  if (oldSession && oldSession.id !== session.id) {
+    sessionIdToKeyCache.delete(oldSession.id)
+  }
   sessionCache.set(sessionKey, session)
+  sessionIdToKeyCache.set(session.id, sessionKey)
 }
 
 /**
- * 通过 sessionId 反查 sessionKey 并从缓存中删除
+ * 通过 sessionId 反查 sessionKey 并从缓存中删除（O(1)）
  * 返回被删除的 sessionKey（用于后续 fork 时重建缓存）
  */
 export function invalidateCachedSession(sessionId: string): string | undefined {
-  for (const [key, val] of sessionCache) {
-    if (val.id === sessionId) {
-      sessionCache.delete(key)
-      return key
-    }
+  const sessionKey = sessionIdToKeyCache.get(sessionId)
+  if (sessionKey) {
+    sessionCache.delete(sessionKey)
+    sessionIdToKeyCache.delete(sessionId)
   }
-  return undefined
+  return sessionKey
 }
 
 /**
@@ -77,7 +82,7 @@ export async function getOrCreateSession(
       const best = candidates[0]
       if (best?.id) {
         const session = { id: best.id, title: best.title }
-        sessionCache.set(sessionKey, session)
+        setCachedSession(sessionKey, session)
         return session
       }
     }
@@ -92,7 +97,7 @@ export async function getOrCreateSession(
     )
   }
   const session = { id: createResp.data.id, title: createResp.data.title }
-  sessionCache.set(sessionKey, session)
+  setCachedSession(sessionKey, session)
   return session
 }
 
