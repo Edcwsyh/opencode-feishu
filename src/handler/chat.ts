@@ -65,6 +65,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
   let placeholderId = ""
   let done = false
+  let oldSessionId = session.id
   const timer =
     thinkingDelay > 0
       ? setTimeout(async () => {
@@ -90,6 +91,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       client, session, sessionKey, directory, query, log,
       body: { parts },
     })
+
+    // fork 后 session ID 变化，需要迁移 pending 注册
+    if (session.id !== oldSessionId) {
+      unregisterPending(oldSessionId)
+      if (placeholderId) {
+        registerPending(session.id, { chatId, placeholderId, feishuClient })
+      }
+    }
 
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
@@ -144,6 +153,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     done = true
     if (timer) clearTimeout(timer)
     unregisterPending(session.id)
+    if (session.id !== oldSessionId) unregisterPending(oldSessionId)
   }
 }
 
@@ -282,13 +292,15 @@ async function promptWithForkRecovery(opts: {
 }): Promise<{ id: string; title?: string }> {
   const { client, sessionKey, directory, query, log, body } = opts
   let { session } = opts
+  const doPrompt = (s: { id: string }) =>
+    client.session.prompt({ path: { id: s.id }, query, body })
   try {
-    await client.session.prompt({ path: { id: session.id }, query, body })
+    await doPrompt(session)
   } catch (err) {
     if (!isModelNotFoundError(err)) throw err
     log("warn", "会话模型不兼容，fork 旧会话重试", { oldSessionId: session.id })
     session = await forkSession(client, session.id, sessionKey, directory)
-    await client.session.prompt({ path: { id: session.id }, query, body })
+    await doPrompt(session)
   }
   return session
 }
