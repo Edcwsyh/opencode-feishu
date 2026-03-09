@@ -114,10 +114,11 @@ export async function handleEvent(
             // 迁移 pending（如果有占位消息在旧 session 上）
             migratePending(sessionId, newSession.id)
           } catch (forkErr) {
+            const errDetail = (forkErr instanceof Error ? forkErr.message : String(forkErr)).slice(0, 200)
             deps.log("error", "主动 fork 失败", {
               sessionId,
               sessionKey,
-              error: forkErr instanceof Error ? forkErr.message : String(forkErr),
+              error: errDetail,
             })
           }
         }
