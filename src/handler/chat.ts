@@ -5,7 +5,7 @@ import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
 import { registerPending, unregisterPending } from "./event.js"
-import { buildSessionKey, getOrCreateSession } from "../session.js"
+import { buildSessionKey, getOrCreateSession, forkSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 
@@ -37,7 +37,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     log("info", "用户介入，自动提示已中断", { sessionKey })
   }
 
-  const session = await getOrCreateSession(client, sessionKey, directory)
+  let session = await getOrCreateSession(client, sessionKey, directory)
 
   // 提取消息内容为 OpenCode parts
   const parts = await buildPromptParts(feishuClient, messageId, messageType, rawContent, content, chatType, senderId, log)
@@ -46,13 +46,9 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
   if (!shouldReply) {
     try {
-      await client.session.prompt({
-        path: { id: session.id },
-        query,
-        body: {
-          parts,
-          noReply: true,
-        },
+      session = await promptWithForkRecovery({
+        client, session, sessionKey, directory, query, log,
+        body: { parts, noReply: true },
       })
     } catch (err) {
       log("warn", "静默转发失败", {
@@ -69,6 +65,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
   let placeholderId = ""
   let done = false
+  let oldSessionId = session.id
   const timer =
     thinkingDelay > 0
       ? setTimeout(async () => {
@@ -90,13 +87,18 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       : null
 
   try {
-    await client.session.prompt({
-      path: { id: session.id },
-      query,
-      body: {
-        parts,
-      },
+    session = await promptWithForkRecovery({
+      client, session, sessionKey, directory, query, log,
+      body: { parts },
     })
+
+    // fork 后 session ID 变化，需要迁移 pending 注册
+    if (session.id !== oldSessionId) {
+      unregisterPending(oldSessionId)
+      if (placeholderId) {
+        registerPending(session.id, { chatId, placeholderId, feishuClient })
+      }
+    }
 
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
@@ -151,6 +153,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     done = true
     if (timer) clearTimeout(timer)
     unregisterPending(session.id)
+    if (session.id !== oldSessionId) unregisterPending(oldSessionId)
   }
 }
 
@@ -268,6 +271,38 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
     }, ms)
     signal.addEventListener("abort", onAbort, { once: true })
   })
+}
+
+function isModelNotFoundError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("ProviderModelNotFound") || msg.includes("ModelNotFound")
+}
+
+/**
+ * 发送 prompt，检测模型不兼容时自动 fork 旧会话并重试（单次）
+ */
+async function promptWithForkRecovery(opts: {
+  client: OpencodeClient
+  session: { id: string; title?: string }
+  sessionKey: string
+  directory: string
+  query?: { directory: string }
+  log: LogFn
+  body: { parts: PromptPart[]; noReply?: boolean }
+}): Promise<{ id: string; title?: string }> {
+  const { client, sessionKey, directory, query, log, body } = opts
+  let { session } = opts
+  const doPrompt = (s: { id: string }) =>
+    client.session.prompt({ path: { id: s.id }, query, body })
+  try {
+    await doPrompt(session)
+  } catch (err) {
+    if (!isModelNotFoundError(err)) throw err
+    log("warn", "会话模型不兼容，fork 旧会话重试", { oldSessionId: session.id })
+    session = await forkSession(client, session.id, sessionKey, directory)
+    await doPrompt(session)
+  }
+  return session
 }
 
 function extractLastAssistantText(

@@ -14,6 +14,13 @@ export function buildSessionKey(chatType: "p2p" | "group", id: string): string {
 }
 
 /**
+ * 生成带时间戳的会话标题
+ */
+function generateSessionTitle(sessionKey: string): string {
+  return `${TITLE_PREFIX}-${sessionKey}-${Date.now()}`
+}
+
+/**
  * 查找或创建 OpenCode 会话（按标题前缀匹配）
  */
 export async function getOrCreateSession(
@@ -40,7 +47,7 @@ export async function getOrCreateSession(
     }
   }
 
-  const title = `${titlePrefix}${Date.now()}`
+  const title = generateSessionTitle(sessionKey)
   const createResp = await client.session.create({ query, body: { title } })
   if (!createResp?.data?.id) {
     const err = (createResp as unknown as { error?: unknown })?.error
@@ -49,4 +56,40 @@ export async function getOrCreateSession(
     )
   }
   return { id: createResp.data.id, title: createResp.data.title }
+}
+
+/**
+ * Fork 旧会话并更新标题，用于模型不兼容时的自动恢复
+ */
+export async function forkSession(
+  client: OpencodeClient,
+  oldSessionId: string,
+  sessionKey: string,
+  directory?: string,
+): Promise<{ id: string; title?: string }> {
+  const query = directory ? { directory } : undefined
+  const resp = await client.session.fork({
+    path: { id: oldSessionId },
+    query,
+    body: {},
+  })
+  if (!resp?.data?.id) {
+    const err = (resp as unknown as { error?: unknown })?.error
+    throw new Error(
+      `Fork 会话失败: ${err ? JSON.stringify(err) : "unknown"}`,
+    )
+  }
+  const title = generateSessionTitle(sessionKey)
+  const updateResp = await client.session.update({
+    path: { id: resp.data.id },
+    query,
+    body: { title },
+  })
+  if (!updateResp?.data?.id) {
+    const err = (updateResp as unknown as { error?: unknown })?.error
+    throw new Error(
+      `更新 forked session 标题失败: ${err ? JSON.stringify(err) : "unknown"}`,
+    )
+  }
+  return { id: resp.data.id, title }
 }
