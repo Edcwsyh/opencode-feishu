@@ -7,6 +7,39 @@ const SESSION_KEY_PREFIX = "feishu"
 const TITLE_PREFIX = "Feishu"
 
 /**
+ * 内存会话缓存：sessionKey → { id, title }
+ * 避免每次 prompt 都查 API；event.ts 中主动 fork 后更新缓存
+ */
+const sessionCache = new Map<string, { id: string; title?: string }>()
+const sessionIdToKeyCache = new Map<string, string>()
+
+export function getCachedSession(sessionKey: string): { id: string; title?: string } | undefined {
+  return sessionCache.get(sessionKey)
+}
+
+export function setCachedSession(sessionKey: string, session: { id: string; title?: string }): void {
+  const oldSession = sessionCache.get(sessionKey)
+  if (oldSession && oldSession.id !== session.id) {
+    sessionIdToKeyCache.delete(oldSession.id)
+  }
+  sessionCache.set(sessionKey, session)
+  sessionIdToKeyCache.set(session.id, sessionKey)
+}
+
+/**
+ * 通过 sessionId 反查 sessionKey 并从缓存中删除（O(1)）
+ * 返回被删除的 sessionKey（用于后续 fork 时重建缓存）
+ */
+export function invalidateCachedSession(sessionId: string): string | undefined {
+  const sessionKey = sessionIdToKeyCache.get(sessionId)
+  if (sessionKey) {
+    sessionCache.delete(sessionKey)
+    sessionIdToKeyCache.delete(sessionId)
+  }
+  return sessionKey
+}
+
+/**
  * 构建会话键
  */
 export function buildSessionKey(chatType: "p2p" | "group", id: string): string {
@@ -28,6 +61,10 @@ export async function getOrCreateSession(
   sessionKey: string,
   directory?: string,
 ): Promise<{ id: string; title?: string }> {
+  // 先查缓存
+  const cached = sessionCache.get(sessionKey)
+  if (cached) return cached
+
   const titlePrefix = `${TITLE_PREFIX}-${sessionKey}-`
 
   const query = directory ? { directory } : undefined
@@ -43,7 +80,11 @@ export async function getOrCreateSession(
         return cb - ca
       })
       const best = candidates[0]
-      if (best?.id) return { id: best.id, title: best.title }
+      if (best?.id) {
+        const session = { id: best.id, title: best.title }
+        setCachedSession(sessionKey, session)
+        return session
+      }
     }
   }
 
@@ -55,7 +96,9 @@ export async function getOrCreateSession(
       `创建 OpenCode 会话失败: ${err ? JSON.stringify(err) : "unknown"}`,
     )
   }
-  return { id: createResp.data.id, title: createResp.data.title }
+  const session = { id: createResp.data.id, title: createResp.data.title }
+  setCachedSession(sessionKey, session)
+  return session
 }
 
 /**
