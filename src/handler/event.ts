@@ -117,6 +117,7 @@ export async function handleEvent(
             deps.log("error", "主动 fork 失败", {
               sessionId,
               sessionKey,
+              error: (forkErr instanceof Error ? forkErr.message : String(forkErr)).slice(0, 200),
               errorType: forkErr instanceof Error ? forkErr.constructor.name : typeof forkErr,
             })
           }
