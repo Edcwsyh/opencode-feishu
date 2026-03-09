@@ -87,8 +87,7 @@ export async function handleEvent(
       const sessionId = props.sessionID as string | undefined
       if (!sessionId) break
 
-      const rawErr = (props.error as Record<string, unknown>)?.message
-      const errMsg = typeof rawErr === "string" ? rawErr : String(props.error)
+      const errMsg = String((props.error as Record<string, unknown>)?.message ?? props.error)
 
       // 追踪模型不兼容错误，供 promptWithForkRecovery 查询
       trackSessionError(sessionId, errMsg)

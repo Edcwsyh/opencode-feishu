@@ -275,10 +275,11 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 
 function isModelNotFoundError(err: unknown, sessionId: string): boolean {
   const msg = err instanceof Error ? err.message : String(err)
+  // 始终 consume，避免 sessionErrors Map 内存泄漏
+  const tracked = consumeSessionError(sessionId)
   // 直接匹配：SDK 直接返回模型不兼容错误
   if (msg.includes("ProviderModelNotFound") || msg.includes("ModelNotFound")) return true
   // 间接匹配：SDK 返回 JSON Parse error，但 session.error 事件已追踪到真实错误
-  const tracked = consumeSessionError(sessionId)
   return !!tracked
 }
 
