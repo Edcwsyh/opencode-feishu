@@ -78,8 +78,16 @@ function migratePending(oldSessionId: string, newSessionId: string): void {
 /**
  * 检测错误消息是否为模型不兼容错误
  */
-function isModelError(errMsg: string): boolean {
-  return errMsg.includes("ModelNotFound") || errMsg.includes("ProviderModelNotFound")
+function isModelError(errMsg: string, rawError?: unknown): boolean {
+  if (errMsg.includes("ModelNotFound") || errMsg.includes("ProviderModelNotFound")) {
+    return true
+  }
+  if (rawError && typeof rawError === "object") {
+    const e = rawError as Record<string, unknown>
+    const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
+    return fields.some(f => f.includes("ModelNotFound"))
+  }
+  return false
 }
 
 /**
@@ -125,11 +133,27 @@ export async function handleEvent(
       const sessionId = props.sessionID as string | undefined
       if (!sessionId) break
 
-      const errMsg = ((props.error as Record<string, unknown>)?.message ?? String(props.error)) as string
+      const error = props.error
+      let errMsg: string
+      if (typeof error === "string") {
+        errMsg = error
+      } else if (error && typeof error === "object") {
+        const e = error as Record<string, unknown>
+        errMsg = String(e.message ?? e.type ?? e.name ?? JSON.stringify(error))
+      } else {
+        errMsg = String(error)
+      }
+
+      deps.log("warn", "收到 session.error 事件", {
+        sessionId,
+        rawError: props.error,
+        extractedMsg: errMsg,
+      })
+
       setSessionError(sessionId, errMsg)
 
       // 模型不兼容错误：主动 fork 会话，更新缓存
-      if (isModelError(errMsg)) {
+      if (isModelError(errMsg, props.error)) {
         const sessionKey = invalidateCachedSession(sessionId)
         if (sessionKey) {
           try {
