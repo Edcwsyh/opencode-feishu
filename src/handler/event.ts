@@ -117,11 +117,24 @@ function migratePending(oldSessionId: string, newSessionId: string): void {
 
 /**
  * 检测错误消息是否为模型不兼容错误
- * errMsg 已由上层从 rawError 的各字段（message/data.message/type/name）提取，无需重复检查
+ * errMsg 可能只含 e.message（如 "request failed"），rawError 的其他字段（name/type）可能才含模型错误标识
  */
-function isModelError(errMsg: string): boolean {
-  const lower = errMsg.toLowerCase()
-  return lower.includes("model not found") || lower.includes("modelnotfound")
+function isModelError(errMsg: string, rawError?: unknown): boolean {
+  const check = (s: string) => {
+    const l = s.toLowerCase()
+    return l.includes("model not found") || l.includes("modelnotfound")
+  }
+  if (check(errMsg)) return true
+  if (rawError && typeof rawError === "object") {
+    const e = rawError as Record<string, unknown>
+    const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
+    if (e.data && typeof e.data === "object" && "message" in e.data) {
+      const dataMsg = e.data.message
+      if (dataMsg) fields.push(String(dataMsg))
+    }
+    return fields.some(check)
+  }
+  return false
 }
 
 /**
@@ -187,7 +200,7 @@ export async function handleEvent(
       setSessionError(sessionId, errMsg)
 
       // 模型不兼容错误：主动 fork 会话，更新缓存（有次数限制）
-      if (isModelError(errMsg)) {
+      if (isModelError(errMsg, props.error)) {
         const sessionKey = invalidateCachedSession(sessionId)
         if (sessionKey) {
           const attempts = forkAttempts.get(sessionKey) ?? 0
@@ -198,7 +211,8 @@ export async function handleEvent(
             try {
               const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
               setCachedSession(sessionKey, newSession)
-              // 解析最新可用模型，存储到 modelOverrides 供下次 prompt 使用
+              // 清除旧 override 后解析最新可用模型
+              modelOverrides.delete(sessionKey)
               try {
                 const fallbackModel = await resolveLatestModel(deps.client, errMsg, deps.directory)
                 if (fallbackModel) {

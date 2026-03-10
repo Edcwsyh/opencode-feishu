@@ -59,10 +59,11 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
   if (!shouldReply) {
     try {
+      const modelOverride = getModelOverride(sessionKey)
       await client.session.prompt({
         path: { id: session.id },
         query,
-        body: { parts, noReply: true },
+        body: { parts, noReply: true, ...(modelOverride ? { model: modelOverride } : {}) },
       })
     } catch (err) {
       log("warn", "静默转发失败", {
