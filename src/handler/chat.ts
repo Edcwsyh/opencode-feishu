@@ -8,7 +8,7 @@ import {
   registerPending, unregisterPending,
   getSessionError, clearSessionError,
   clearForkAttempts, getForkAttempts, setForkAttempts, MAX_FORK_ATTEMPTS,
-  isModelError,
+  isModelError, extractErrorFields,
 } from "./event.js"
 import { buildSessionKey, getOrCreateSession, invalidateCachedSession, setCachedSession, forkOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
@@ -47,7 +47,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   if (existing) {
     existing.abort()
     activeAutoPrompts.delete(sessionKey)
-    log("info", "用户介入，自动提示已中断", { sessionKey })
+    log("info", "用户介入，自动提示已中断", { sessionKey: maskKey(sessionKey) })
   }
 
   const session = await getOrCreateSession(client, sessionKey, directory)
@@ -57,13 +57,13 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   if (!parts.length) return
 
   log("info", "收到用户消息", {
-    sessionKey,
+    sessionKey: maskKey(sessionKey),
     sessionId: session.id,
     chatType,
     senderId,
     messageType,
     shouldReply,
-    content,
+    content: content.slice(0, 500),
     parts,
   })
 
@@ -120,13 +120,13 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
     const ac = new AbortController()
     activeAutoPrompts.set(sessionKey, ac)
-    log("info", "启动自动提示循环", { sessionKey, maxIterations: autoPrompt.maxIterations })
+    log("info", "启动自动提示循环", { sessionKey: maskKey(sessionKey), maxIterations: autoPrompt.maxIterations })
 
     try {
       for (let i = 0; i < autoPrompt.maxIterations; i++) {
         await abortableSleep(autoPrompt.intervalSeconds * 1000, ac.signal)
 
-        log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
+        log("info", "发送自动提示", { sessionKey: maskKey(sessionKey), iteration: i + 1 })
 
         await client.session.prompt({
           path: { id: activeId },
@@ -137,7 +137,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         const text = await pollForResponse(client, activeId, { timeout, pollInterval, stablePolls, query, signal: ac.signal })
         if (text) {
           log("info", "自动提示响应", {
-            sessionKey,
+            sessionKey: maskKey(sessionKey),
             iteration: i + 1,
             output: text.slice(0, 500),
             outputLength: text.length,
@@ -146,13 +146,13 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         }
       }
 
-      log("info", "自动提示循环结束（达到最大次数）", { sessionKey })
+      log("info", "自动提示循环结束（达到最大次数）", { sessionKey: maskKey(sessionKey) })
     } catch (loopErr) {
       if ((loopErr as Error).name === "AbortError") {
-        log("info", "自动提示循环被中断", { sessionKey })
+        log("info", "自动提示循环被中断", { sessionKey: maskKey(sessionKey) })
       } else {
         log("error", "自动提示循环异常", {
-          sessionKey,
+          sessionKey: maskKey(sessionKey),
           error: loopErr instanceof Error ? loopErr.message : String(loopErr),
         })
       }
@@ -171,7 +171,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
     log("info", "模型响应完成", {
-      sessionKey,
+      sessionKey: maskKey(sessionKey),
       sessionId: session.id,
       output: finalText ? finalText.slice(0, 500) : "(empty)",
       outputLength: finalText?.length ?? 0,
@@ -189,6 +189,15 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
     let sessionError = getSessionError(session.id)
     clearSessionError(session.id)
+
+    // SSE 缓存未命中时，尝试从 prompt() 抛出的错误中提取模型错误信息
+    if (!sessionError) {
+      const thrownFields = extractErrorFields(err)
+      if (isModelError(thrownFields)) {
+        const thrownMsg = err instanceof Error ? err.message : String(err)
+        sessionError = { message: thrownMsg, fields: thrownFields }
+      }
+    }
 
     // 模型不兼容错误：在 catch 块内完成整个恢复流程（fork → 解析模型 → 重试）
     if (sessionError && isModelError(sessionError.fields)) {
