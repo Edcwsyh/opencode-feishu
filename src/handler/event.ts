@@ -29,13 +29,31 @@ const SESSION_ERROR_TTL_MS = 30_000
 
 /** Fork 次数限制：防止模型不兼容时无限 fork 循环 */
 const forkAttempts = new Map<string, number>()
+const forkAttemptTimeouts = new Map<string, NodeJS.Timeout>()
 const MAX_FORK_ATTEMPTS = 2
+const FORK_ATTEMPTS_TTL_MS = 3_600_000 // 1 小时后自动清除
 
 /**
  * 重置指定 sessionKey 的 fork 计数（成功 prompt 后调用）
  */
 export function clearForkAttempts(sessionKey: string): void {
   forkAttempts.delete(sessionKey)
+  const timer = forkAttemptTimeouts.get(sessionKey)
+  if (timer) {
+    clearTimeout(timer)
+    forkAttemptTimeouts.delete(sessionKey)
+  }
+}
+
+function setForkAttempts(sessionKey: string, count: number): void {
+  forkAttempts.set(sessionKey, count)
+  const existing = forkAttemptTimeouts.get(sessionKey)
+  if (existing) clearTimeout(existing)
+  const timeoutId = setTimeout(() => {
+    forkAttempts.delete(sessionKey)
+    forkAttemptTimeouts.delete(sessionKey)
+  }, FORK_ATTEMPTS_TTL_MS)
+  forkAttemptTimeouts.set(sessionKey, timeoutId)
 }
 
 export function getSessionError(sessionId: string): string | undefined {
@@ -187,7 +205,7 @@ export async function handleEvent(
           if (attempts >= MAX_FORK_ATTEMPTS) {
             deps.log("warn", "已达 fork 上限，放弃恢复", { sessionKey, attempts })
           } else {
-            forkAttempts.set(sessionKey, attempts + 1)
+            setForkAttempts(sessionKey, attempts + 1)
             try {
               const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
               setCachedSession(sessionKey, newSession)

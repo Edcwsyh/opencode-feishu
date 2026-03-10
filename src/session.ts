@@ -2,6 +2,7 @@
  * 共享会话管理：查找或创建 OpenCode 会话
  */
 import type { OpencodeClient } from "@opencode-ai/sdk"
+import type { LogFn } from "./types.js"
 
 const SESSION_KEY_PREFIX = "feishu"
 const TITLE_PREFIX = "Feishu"
@@ -165,7 +166,7 @@ export async function forkOrCreateSession(
   oldSessionId: string,
   sessionKey: string,
   directory?: string,
-  log?: import("./types.js").LogFn,
+  log?: LogFn,
 ): Promise<{ id: string; title?: string }> {
   try {
     return await forkSession(client, oldSessionId, sessionKey, directory)
