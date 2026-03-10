@@ -22,6 +22,11 @@ export interface EventDeps {
   directory: string
 }
 
+/** 脱敏 sessionKey（隐藏末段用户/群 ID） */
+function maskKey(sessionKey: string): string {
+  return sessionKey.replace(/-[^-]+$/, "-***")
+}
+
 const pendingBySession = new Map<string, PendingReplyPayload>()
 const sessionErrors = new Map<string, string>()
 const sessionErrorTimeouts = new Map<string, NodeJS.Timeout>()
@@ -205,7 +210,7 @@ export async function handleEvent(
         if (sessionKey) {
           const attempts = forkAttempts.get(sessionKey) ?? 0
           if (attempts >= MAX_FORK_ATTEMPTS) {
-            deps.log("warn", "已达 fork 上限，放弃恢复", { sessionKey, attempts })
+            deps.log("warn", "已达 fork 上限，放弃恢复", { sessionKey: maskKey(sessionKey), attempts })
           } else {
             setForkAttempts(sessionKey, attempts + 1)
             try {
@@ -218,14 +223,14 @@ export async function handleEvent(
                 if (fallbackModel) {
                   modelOverrides.set(sessionKey, fallbackModel)
                   deps.log("info", "已解析降级模型", {
-                    sessionKey,
+                    sessionKey: maskKey(sessionKey),
                     providerID: fallbackModel.providerID,
                     modelID: fallbackModel.modelID,
                   })
                 }
               } catch (modelErr) {
                 deps.log("warn", "解析降级模型失败，将使用默认模型", {
-                  sessionKey,
+                  sessionKey: maskKey(sessionKey),
                   error: modelErr instanceof Error ? modelErr.message : String(modelErr),
                 })
               }
@@ -233,7 +238,7 @@ export async function handleEvent(
               deps.log("warn", "模型不兼容，已恢复会话", {
                 oldSessionId: sessionId,
                 newSessionId: newSession.id,
-                sessionKey,
+                sessionKey: maskKey(sessionKey),
                 forkAttempt: attempts + 1,
               })
 
@@ -242,7 +247,7 @@ export async function handleEvent(
             } catch (recoverErr) {
               deps.log("error", "会话恢复失败", {
                 sessionId,
-                sessionKey,
+                sessionKey: maskKey(sessionKey),
                 error: recoverErr instanceof Error ? recoverErr.message : String(recoverErr),
               })
             }
@@ -297,16 +302,17 @@ async function resolveLatestModel(
     return { providerID, modelID: defaultModelID }
   }
 
-  // Fallback：从 provider 的模型列表中选最新的非 deprecated 且支持 tool_call 的模型
+  // Fallback：从 provider 的模型列表中选最新模型（优先 tool_call，其次任意非 deprecated）
   const provider = data.all?.find(p => p.id === providerID)
   if (!provider?.models) return undefined
 
-  const models = Object.values(provider.models)
-    .filter(m => m.status !== "deprecated" && m.tool_call)
+  const sortedModels = Object.values(provider.models)
+    .filter(m => m.status !== "deprecated")
     .sort((a, b) => b.release_date.localeCompare(a.release_date))
 
-  if (models.length === 0) return undefined
-  return { providerID, modelID: models[0].id }
+  if (sortedModels.length === 0) return undefined
+  const best = sortedModels.find(m => m.tool_call) ?? sortedModels[0]
+  return { providerID, modelID: best.id }
 }
 
 function extractPartText(part: { type?: string; text?: string; [key: string]: unknown }): string {
