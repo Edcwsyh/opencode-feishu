@@ -4,7 +4,7 @@
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
-import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts } from "./event.js"
+import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts, getModelOverride, clearModelOverride } from "./event.js"
 import { buildSessionKey, getOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
@@ -56,13 +56,17 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     parts,
   })
 
+  // 构建 prompt body（含可能的模型降级覆盖）
+  const modelOverride = getModelOverride(sessionKey)
+  const baseBody = { parts, ...(modelOverride ? { model: modelOverride } : {}) }
+
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
   if (!shouldReply) {
     try {
       await client.session.prompt({
         path: { id: session.id },
         query,
-        body: { parts, noReply: true },
+        body: { ...baseBody, noReply: true },
       })
     } catch (err) {
       log("warn", "静默转发失败", {
@@ -103,13 +107,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     await client.session.prompt({
       path: { id: session.id },
       query,
-      body: { parts },
+      body: baseBody,
     })
 
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
-    // prompt 成功：重置 fork 计数，避免一次性错误导致永久计数
+    // prompt 成功：重置 fork 计数和模型覆盖
     clearForkAttempts(sessionKey)
+    clearModelOverride(sessionKey)
 
     await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
