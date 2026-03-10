@@ -86,8 +86,8 @@ function isModelError(errMsg: string, rawError?: unknown): boolean {
     const e = rawError as Record<string, unknown>
     const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
     // 也检查 data.message（SDK 错误类型的嵌套结构）
-    if (e.data && typeof e.data === "object") {
-      const dataMsg = (e.data as Record<string, unknown>).message
+    if (e.data && typeof e.data === "object" && "message" in e.data) {
+      const dataMsg = (e.data as { message?: unknown }).message
       if (dataMsg) fields.push(String(dataMsg))
     }
     return fields.some(f => f.includes("ModelNotFound") || f.includes("ProviderModelNotFound"))
@@ -144,8 +144,8 @@ export async function handleEvent(
         errMsg = error
       } else if (error && typeof error === "object") {
         const e = error as Record<string, unknown>
-        const dataMsg = (e.data && typeof e.data === "object")
-          ? (e.data as Record<string, unknown>).message
+        const dataMsg = (e.data && typeof e.data === "object" && "message" in e.data)
+          ? String((e.data as { message?: unknown }).message)
           : undefined
         errMsg = String(e.message ?? dataMsg ?? e.type ?? e.name ?? "An unexpected error occurred")
       } else {
