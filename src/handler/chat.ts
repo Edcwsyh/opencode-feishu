@@ -113,6 +113,54 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         }, thinkingDelay)
       : null
 
+  /** 自动提示循环：响应完成后自动发送"继续"推动 OpenCode 持续工作 */
+  async function runAutoPromptLoop(activeId: string): Promise<void> {
+    const { autoPrompt } = config
+    if (!autoPrompt.enabled || !shouldReply) return
+
+    const ac = new AbortController()
+    activeAutoPrompts.set(sessionKey, ac)
+    log("info", "启动自动提示循环", { sessionKey, maxIterations: autoPrompt.maxIterations })
+
+    try {
+      for (let i = 0; i < autoPrompt.maxIterations; i++) {
+        await abortableSleep(autoPrompt.intervalSeconds * 1000, ac.signal)
+
+        log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
+
+        await client.session.prompt({
+          path: { id: activeId },
+          query,
+          body: { parts: [{ type: "text", text: autoPrompt.message }] },
+        })
+
+        const text = await pollForResponse(client, activeId, { timeout, pollInterval, stablePolls, query, signal: ac.signal })
+        if (text) {
+          log("info", "自动提示响应", {
+            sessionKey,
+            iteration: i + 1,
+            output: text.slice(0, 500),
+            outputLength: text.length,
+          })
+          await sender.sendTextMessage(feishuClient, chatId, text)
+        }
+      }
+
+      log("info", "自动提示循环结束（达到最大次数）", { sessionKey })
+    } catch (loopErr) {
+      if ((loopErr as Error).name === "AbortError") {
+        log("info", "自动提示循环被中断", { sessionKey })
+      } else {
+        log("error", "自动提示循环异常", {
+          sessionKey,
+          error: loopErr instanceof Error ? loopErr.message : String(loopErr),
+        })
+      }
+    } finally {
+      activeAutoPrompts.delete(sessionKey)
+    }
+  }
+
   try {
     await client.session.prompt({
       path: { id: session.id },
@@ -134,56 +182,12 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
     await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
-    // 自动提示循环：响应完成后自动发送"继续"推动 OpenCode 持续工作
-    const { autoPrompt } = config
-    if (autoPrompt.enabled && shouldReply) {
-      const ac = new AbortController()
-      activeAutoPrompts.set(sessionKey, ac)
-      log("info", "启动自动提示循环", { sessionKey, maxIterations: autoPrompt.maxIterations })
-
-      try {
-        for (let i = 0; i < autoPrompt.maxIterations; i++) {
-          await abortableSleep(autoPrompt.intervalSeconds * 1000, ac.signal)
-
-          log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
-
-          await client.session.prompt({
-            path: { id: session.id },
-            query,
-            body: { parts: [{ type: "text", text: autoPrompt.message }] },
-          })
-
-          const text = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query, signal: ac.signal })
-          if (text) {
-            log("info", "自动提示响应", {
-              sessionKey,
-              iteration: i + 1,
-              output: text.slice(0, 500),
-              outputLength: text.length,
-            })
-            await sender.sendTextMessage(feishuClient, chatId, text)
-          }
-        }
-
-        log("info", "自动提示循环结束（达到最大次数）", { sessionKey })
-      } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          log("info", "自动提示循环被中断", { sessionKey })
-        } else {
-          log("error", "自动提示循环异常", {
-            sessionKey,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      } finally {
-        activeAutoPrompts.delete(sessionKey)
-      }
-    }
+    await runAutoPromptLoop(session.id)
   } catch (err) {
     // 等待一个微小窗口，让可能在途的 session.error 事件有机会到达并被处理
     await new Promise(r => setTimeout(r, SSE_RACE_WAIT_MS))
 
-    const sessionError = getSessionError(session.id)
+    let sessionError = getSessionError(session.id)
     clearSessionError(session.id)
 
     // 模型不兼容错误：在 catch 块内完成整个恢复流程（fork → 解析模型 → 重试）
@@ -247,12 +251,20 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
             sessionKey: maskKey(sessionKey),
             forkAttempt: attempts + 1,
           })
+
+          await runAutoPromptLoop(newSession.id)
           return
         } catch (recoveryErr) {
+          const recoveryErrMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
+          // 检查恢复过程中新 session 是否也产生了 SSE 错误
+          const newSessionError = activeSessionId !== session.id ? getSessionError(activeSessionId) : undefined
+          if (newSessionError) clearSessionError(activeSessionId)
+          // 用恢复阶段的实际错误覆盖原始的 model-not-found 错误
+          sessionError = newSessionError ?? { message: recoveryErrMsg, fields: [] }
           log("error", "模型恢复失败", {
             sessionId: session.id,
             sessionKey: maskKey(sessionKey),
-            error: recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr),
+            error: recoveryErrMsg,
           })
           // fall through 到正常错误处理
         }
