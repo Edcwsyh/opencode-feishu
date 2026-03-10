@@ -85,7 +85,7 @@ function isModelError(errMsg: string, rawError?: unknown): boolean {
   if (rawError && typeof rawError === "object") {
     const e = rawError as Record<string, unknown>
     const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
-    return fields.some(f => f.includes("ModelNotFound"))
+    return fields.some(f => f.includes("ModelNotFound") || f.includes("ProviderModelNotFound"))
   }
   return false
 }
@@ -139,14 +139,17 @@ export async function handleEvent(
         errMsg = error
       } else if (error && typeof error === "object") {
         const e = error as Record<string, unknown>
-        errMsg = String(e.message ?? e.type ?? e.name ?? JSON.stringify(error))
+        errMsg = String(e.message ?? e.type ?? e.name ?? "An unexpected error occurred")
       } else {
         errMsg = String(error)
       }
 
+      const safeErrorFields = error && typeof error === "object"
+        ? { type: (error as Record<string, unknown>).type, name: (error as Record<string, unknown>).name }
+        : { raw: String(error) }
       deps.log("warn", "收到 session.error 事件", {
         sessionId,
-        rawError: props.error,
+        error: safeErrorFields,
         extractedMsg: errMsg,
       })
 
