@@ -189,7 +189,7 @@ export async function handleEvent(
           } else {
             forkAttempts.set(sessionKey, attempts + 1)
             try {
-              const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory)
+              const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
               setCachedSession(sessionKey, newSession)
               deps.log("warn", "模型不兼容，已恢复会话", {
                 oldSessionId: sessionId,

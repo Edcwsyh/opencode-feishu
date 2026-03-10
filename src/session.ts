@@ -165,10 +165,16 @@ export async function forkOrCreateSession(
   oldSessionId: string,
   sessionKey: string,
   directory?: string,
+  log?: import("./types.js").LogFn,
 ): Promise<{ id: string; title?: string }> {
   try {
     return await forkSession(client, oldSessionId, sessionKey, directory)
-  } catch {
+  } catch (forkErr) {
+    log?.("warn", "Fork 失败，回退到创建新会话", {
+      oldSessionId,
+      sessionKey,
+      error: forkErr instanceof Error ? forkErr.message : String(forkErr),
+    })
     return await createFreshSession(client, sessionKey, directory)
   }
 }
