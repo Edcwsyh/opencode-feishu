@@ -27,6 +27,9 @@ const sessionErrors = new Map<string, string>()
 const sessionErrorTimeouts = new Map<string, NodeJS.Timeout>()
 const SESSION_ERROR_TTL_MS = 30_000
 
+/** 模型降级覆盖：fork 恢复后存储可用模型，供 chat.ts prompt 时使用 */
+const modelOverrides = new Map<string, { providerID: string; modelID: string }>()
+
 /** Fork 次数限制：防止模型不兼容时无限 fork 循环 */
 const forkAttempts = new Map<string, number>()
 const forkAttemptTimeouts = new Map<string, NodeJS.Timeout>()
@@ -54,6 +57,14 @@ function setForkAttempts(sessionKey: string, count: number): void {
     forkAttemptTimeouts.delete(sessionKey)
   }, FORK_ATTEMPTS_TTL_MS)
   forkAttemptTimeouts.set(sessionKey, timeoutId)
+}
+
+export function getModelOverride(sessionKey: string): { providerID: string; modelID: string } | undefined {
+  return modelOverrides.get(sessionKey)
+}
+
+export function clearModelOverride(sessionKey: string): void {
+  modelOverrides.delete(sessionKey)
 }
 
 export function getSessionError(sessionId: string): string | undefined {
@@ -106,22 +117,11 @@ function migratePending(oldSessionId: string, newSessionId: string): void {
 
 /**
  * 检测错误消息是否为模型不兼容错误
+ * errMsg 已由上层从 rawError 的各字段（message/data.message/type/name）提取，无需重复检查
  */
-function isModelError(errMsg: string, rawError?: unknown): boolean {
-  if (errMsg.includes("ModelNotFound") || errMsg.includes("ProviderModelNotFound")) {
-    return true
-  }
-  if (rawError && typeof rawError === "object") {
-    const e = rawError as Record<string, unknown>
-    const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
-    // 也检查 data.message（SDK 错误类型的嵌套结构）
-    if (e.data && typeof e.data === "object" && "message" in e.data) {
-      const dataMsg = e.data.message
-      if (dataMsg) fields.push(String(dataMsg))
-    }
-    return fields.some(f => f.includes("ModelNotFound") || f.includes("ProviderModelNotFound"))
-  }
-  return false
+function isModelError(errMsg: string): boolean {
+  const lower = errMsg.toLowerCase()
+  return lower.includes("model not found") || lower.includes("modelnotfound")
 }
 
 /**
@@ -182,23 +182,12 @@ export async function handleEvent(
         errMsg = String(error)
       }
 
-      const safeErrorFields = error && typeof error === "object"
-        ? {
-            type: (error as Record<string, unknown>).type,
-            name: (error as Record<string, unknown>).name,
-            dataMessage: ((error as Record<string, unknown>).data as Record<string, unknown> | undefined)?.message,
-          }
-        : { raw: String(error) }
-      deps.log("warn", "收到 session.error 事件", {
-        sessionId,
-        error: safeErrorFields,
-        extractedMsg: errMsg,
-      })
+      deps.log("warn", "收到 session.error 事件", { sessionId, errMsg })
 
       setSessionError(sessionId, errMsg)
 
       // 模型不兼容错误：主动 fork 会话，更新缓存（有次数限制）
-      if (isModelError(errMsg, props.error)) {
+      if (isModelError(errMsg)) {
         const sessionKey = invalidateCachedSession(sessionId)
         if (sessionKey) {
           const attempts = forkAttempts.get(sessionKey) ?? 0
@@ -209,6 +198,24 @@ export async function handleEvent(
             try {
               const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
               setCachedSession(sessionKey, newSession)
+              // 解析最新可用模型，存储到 modelOverrides 供下次 prompt 使用
+              try {
+                const fallbackModel = await resolveLatestModel(deps.client, errMsg, deps.directory)
+                if (fallbackModel) {
+                  modelOverrides.set(sessionKey, fallbackModel)
+                  deps.log("info", "已解析降级模型", {
+                    sessionKey,
+                    providerID: fallbackModel.providerID,
+                    modelID: fallbackModel.modelID,
+                  })
+                }
+              } catch (modelErr) {
+                deps.log("warn", "解析降级模型失败，将使用默认模型", {
+                  sessionKey,
+                  error: modelErr instanceof Error ? modelErr.message : String(modelErr),
+                })
+              }
+
               deps.log("warn", "模型不兼容，已恢复会话", {
                 oldSessionId: sessionId,
                 newSessionId: newSession.id,
@@ -236,6 +243,40 @@ export async function handleEvent(
     default:
       break
   }
+}
+
+/**
+ * 从错误消息中提取 providerID，查询可用模型列表，返回最新可用模型
+ */
+async function resolveLatestModel(
+  client: OpencodeClient,
+  errMsg: string,
+  directory?: string,
+): Promise<{ providerID: string; modelID: string } | undefined> {
+  const match = errMsg.match(/model not found:?\s*(\w[\w-]*)\//i)
+  if (!match) return undefined
+  const providerID = match[1]
+
+  const query = directory ? { directory } : undefined
+  const { data } = await client.provider.list({ query })
+  if (!data) return undefined
+
+  // 优先使用该 provider 的默认模型
+  const defaultModelID = data.default?.[providerID]
+  if (defaultModelID) {
+    return { providerID, modelID: defaultModelID }
+  }
+
+  // Fallback：从 provider 的模型列表中选最新的非 deprecated 且支持 tool_call 的模型
+  const provider = data.all?.find(p => p.id === providerID)
+  if (!provider?.models) return undefined
+
+  const models = Object.values(provider.models)
+    .filter(m => m.status !== "deprecated" && m.tool_call)
+    .sort((a, b) => b.release_date.localeCompare(a.release_date))
+
+  if (models.length === 0) return undefined
+  return { providerID, modelID: models[0].id }
 }
 
 function extractPartText(part: { type?: string; text?: string; [key: string]: unknown }): string {

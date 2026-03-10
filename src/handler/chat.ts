@@ -4,7 +4,7 @@
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
-import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts } from "./event.js"
+import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts, getModelOverride, clearModelOverride } from "./event.js"
 import { buildSessionKey, getOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
@@ -100,16 +100,18 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       : null
 
   try {
+    const modelOverride = getModelOverride(sessionKey)
     await client.session.prompt({
       path: { id: session.id },
       query,
-      body: { parts },
+      body: { parts, ...(modelOverride ? { model: modelOverride } : {}) },
     })
 
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
-    // prompt 成功：重置 fork 计数，避免一次性错误导致永久计数
+    // prompt 成功：重置 fork 计数和模型覆盖
     clearForkAttempts(sessionKey)
+    clearModelOverride(sessionKey)
 
     await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
