@@ -214,7 +214,7 @@ export async function handleEvent(
               // 清除旧 override 后解析最新可用模型
               modelOverrides.delete(sessionKey)
               try {
-                const fallbackModel = await resolveLatestModel(deps.client, errMsg, deps.directory)
+                const fallbackModel = await resolveLatestModel(deps.client, props.error ?? errMsg, deps.directory)
                 if (fallbackModel) {
                   modelOverrides.set(sessionKey, fallbackModel)
                   deps.log("info", "已解析降级模型", {
@@ -260,16 +260,32 @@ export async function handleEvent(
 }
 
 /**
- * 从错误消息中提取 providerID，查询可用模型列表，返回最新可用模型
+ * 从错误对象的所有字段中提取 providerID，查询可用模型列表，返回最新可用模型
+ * rawError 可能是 string 或 SDK error object，需要检查 message/data.message/type/name
  */
 async function resolveLatestModel(
   client: OpencodeClient,
-  errMsg: string,
+  rawError: unknown,
   directory?: string,
 ): Promise<{ providerID: string; modelID: string } | undefined> {
-  const match = errMsg.match(/model not found:?\s*(\w[\w-]*)\//i)
-  if (!match) return undefined
-  const providerID = match[1]
+  const pattern = /model not found:?\s*(\w[\w-]*)\//i
+  const fields: string[] = []
+  if (typeof rawError === "string") {
+    fields.push(rawError)
+  } else if (rawError && typeof rawError === "object") {
+    const e = rawError as Record<string, unknown>
+    for (const key of ["message", "type", "name"]) {
+      if (e[key]) fields.push(String(e[key]))
+    }
+    if (e.data && typeof e.data === "object" && "message" in e.data) {
+      const dataMsg = (e.data as { message?: unknown }).message
+      if (dataMsg) fields.push(String(dataMsg))
+    }
+  } else {
+    fields.push(String(rawError))
+  }
+  const providerID = fields.map(f => pattern.exec(f)?.[1]).find(Boolean)
+  if (!providerID) return undefined
 
   const query = directory ? { directory } : undefined
   const { data } = await client.provider.list({ query })
