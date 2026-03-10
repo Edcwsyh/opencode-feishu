@@ -4,8 +4,13 @@
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
-import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts, getModelOverride, clearModelOverride } from "./event.js"
-import { buildSessionKey, getOrCreateSession } from "../session.js"
+import {
+  registerPending, unregisterPending,
+  getSessionError, clearSessionError,
+  clearForkAttempts, getForkAttempts, setForkAttempts, MAX_FORK_ATTEMPTS,
+  isModelError, extractErrorFields,
+} from "./event.js"
+import { buildSessionKey, getOrCreateSession, invalidateCachedSession, setCachedSession, forkOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 
@@ -37,7 +42,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   if (existing) {
     existing.abort()
     activeAutoPrompts.delete(sessionKey)
-    log("info", "用户介入，自动提示已中断", { sessionKey })
+    log("info", "用户介入，自动提示已中断", { sessionKey: sessionKey })
   }
 
   const session = await getOrCreateSession(client, sessionKey, directory)
@@ -53,12 +58,11 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     senderId,
     messageType,
     shouldReply,
+    content,
     parts,
   })
 
-  // 构建 prompt body（含可能的模型降级覆盖）
-  const modelOverride = getModelOverride(sessionKey)
-  const baseBody = { parts, ...(modelOverride ? { model: modelOverride } : {}) }
+  const baseBody = { parts }
 
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
   if (!shouldReply) {
@@ -83,6 +87,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
   let placeholderId = ""
   let done = false
+  let activeSessionId = session.id
   const timer =
     thinkingDelay > 0
       ? setTimeout(async () => {
@@ -92,7 +97,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
             if (done) return // 重新检查，防止发送期间主流程已结束
             if (res.ok && res.messageId) {
               placeholderId = res.messageId
-              registerPending(session.id, { chatId, placeholderId, feishuClient })
+              registerPending(activeSessionId, { chatId, placeholderId, feishuClient })
             }
           } catch (err) {
             log("warn", "发送占位消息失败", {
@@ -103,6 +108,53 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         }, thinkingDelay)
       : null
 
+  /** 自动提示循环：响应完成后自动发送"继续"推动 OpenCode 持续工作 */
+  async function runAutoPromptLoop(activeId: string): Promise<void> {
+    const { autoPrompt } = config
+    if (!autoPrompt.enabled || !shouldReply) return
+
+    const ac = new AbortController()
+    activeAutoPrompts.set(sessionKey, ac)
+    log("info", "启动自动提示循环", { sessionKey, maxIterations: autoPrompt.maxIterations })
+
+    try {
+      for (let i = 0; i < autoPrompt.maxIterations; i++) {
+        await abortableSleep(autoPrompt.intervalSeconds * 1000, ac.signal)
+
+        log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
+
+        await client.session.prompt({
+          path: { id: activeId },
+          query,
+          body: { parts: [{ type: "text", text: autoPrompt.message }] },
+        })
+
+        const text = await pollForResponse(client, activeId, { timeout, pollInterval, stablePolls, query, signal: ac.signal })
+        if (text) {
+          log("info", "自动提示响应", {
+            sessionKey,
+            iteration: i + 1,
+            output: text,
+          })
+          await sender.sendTextMessage(feishuClient, chatId, text)
+        }
+      }
+
+      log("info", "自动提示循环结束（达到最大次数）", { sessionKey: sessionKey })
+    } catch (loopErr) {
+      if ((loopErr as Error).name === "AbortError") {
+        log("info", "自动提示循环被中断", { sessionKey: sessionKey })
+      } else {
+        log("error", "自动提示循环异常", {
+          sessionKey,
+          error: loopErr instanceof Error ? loopErr.message : String(loopErr),
+        })
+      }
+    } finally {
+      activeAutoPrompts.delete(sessionKey)
+    }
+  }
+
   try {
     await client.session.prompt({
       path: { id: session.id },
@@ -112,68 +164,130 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
     const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
 
-    // prompt 成功：重置 fork 计数和模型覆盖
+    log("info", "模型响应完成", {
+      sessionKey,
+      sessionId: session.id,
+      output: finalText || "(empty)",
+    })
+
+    // prompt 成功：重置 fork 计数
     clearForkAttempts(sessionKey)
-    clearModelOverride(sessionKey)
 
     await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
-    // 自动提示循环：响应完成后自动发送"继续"推动 OpenCode 持续工作
-    const { autoPrompt } = config
-    if (autoPrompt.enabled && shouldReply) {
-      const ac = new AbortController()
-      activeAutoPrompts.set(sessionKey, ac)
-      log("info", "启动自动提示循环", { sessionKey, maxIterations: autoPrompt.maxIterations })
-
-      try {
-        for (let i = 0; i < autoPrompt.maxIterations; i++) {
-          await abortableSleep(autoPrompt.intervalSeconds * 1000, ac.signal)
-
-          log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
-
-          await client.session.prompt({
-            path: { id: session.id },
-            query,
-            body: { parts: [{ type: "text", text: autoPrompt.message }] },
-          })
-
-          const text = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query, signal: ac.signal })
-          if (text) {
-            await sender.sendTextMessage(feishuClient, chatId, text)
-          }
-        }
-
-        log("info", "自动提示循环结束（达到最大次数）", { sessionKey })
-      } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          log("info", "自动提示循环被中断", { sessionKey })
-        } else {
-          log("error", "自动提示循环异常", {
-            sessionKey,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      } finally {
-        activeAutoPrompts.delete(sessionKey)
-      }
-    }
+    await runAutoPromptLoop(session.id)
   } catch (err) {
     // 等待一个微小窗口，让可能在途的 session.error 事件有机会到达并被处理
     await new Promise(r => setTimeout(r, SSE_RACE_WAIT_MS))
 
-    // 优先使用 session.error 事件中的实际错误信息（prompt() 常抛出无意义的 JSON 解析错误）
-    const sessionError = getSessionError(session.id)
+    let sessionError = getSessionError(session.id)
     clearSessionError(session.id)
+
+    // SSE 缓存未命中时，尝试从 prompt() 抛出的错误中提取模型错误信息
+    if (!sessionError) {
+      const thrownFields = extractErrorFields(err)
+      if (isModelError(thrownFields)) {
+        const thrownMsg = err instanceof Error ? err.message : String(err)
+        sessionError = { message: thrownMsg, fields: thrownFields }
+      }
+    }
+
+    // 模型不兼容错误：在 catch 块内完成整个恢复流程（fork → 解析模型 → 重试）
+    if (sessionError && isModelError(sessionError.fields)) {
+      const attempts = getForkAttempts(sessionKey)
+      if (attempts < MAX_FORK_ATTEMPTS) {
+        setForkAttempts(sessionKey, attempts + 1)
+        try {
+          invalidateCachedSession(session.id)
+          const newSession = await forkOrCreateSession(client, session.id, sessionKey, directory, log)
+          setCachedSession(sessionKey, newSession)
+          activeSessionId = newSession.id
+
+          // 解析降级模型
+          let modelOverride: { providerID: string; modelID: string } | undefined
+          try {
+            modelOverride = await resolveLatestModel(client, sessionError.fields, directory)
+            if (modelOverride) {
+              log("info", "已解析降级模型", {
+                sessionKey,
+                providerID: modelOverride.providerID,
+                modelID: modelOverride.modelID,
+              })
+            }
+          } catch (modelErr) {
+            log("warn", "解析降级模型失败，将使用默认模型", {
+              sessionKey,
+              error: modelErr instanceof Error ? modelErr.message : String(modelErr),
+            })
+          }
+
+          // 迁移占位消息到新 session
+          unregisterPending(session.id)
+          if (placeholderId) {
+            registerPending(newSession.id, { chatId, placeholderId, feishuClient })
+          }
+
+          // 用新 session + 降级模型重试 prompt
+          const retryBody = { ...baseBody, ...(modelOverride ? { model: modelOverride } : {}) }
+          await client.session.prompt({
+            path: { id: newSession.id },
+            query,
+            body: retryBody,
+          })
+
+          const finalText = await pollForResponse(client, newSession.id, { timeout, pollInterval, stablePolls, query })
+
+          log("info", "恢复后模型响应完成", {
+            sessionKey,
+            newSessionId: newSession.id,
+            output: finalText || "(empty)",
+          })
+
+          clearForkAttempts(sessionKey)
+          await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
+
+          log("info", "模型不兼容恢复成功", {
+            oldSessionId: session.id,
+            newSessionId: newSession.id,
+            sessionKey,
+            forkAttempt: attempts + 1,
+          })
+
+          await runAutoPromptLoop(newSession.id)
+          return
+        } catch (recoveryErr) {
+          const recoveryErrMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
+          // 检查恢复过程中新 session 是否也产生了 SSE 错误
+          const newSessionError = activeSessionId !== session.id ? getSessionError(activeSessionId) : undefined
+          if (newSessionError) clearSessionError(activeSessionId)
+          // 用恢复阶段的实际错误覆盖原始的 model-not-found 错误
+          sessionError = newSessionError ?? { message: recoveryErrMsg, fields: [] }
+          log("error", "模型恢复失败", {
+            sessionId: session.id,
+            sessionKey,
+            error: recoveryErrMsg,
+          })
+          // fall through 到正常错误处理
+        }
+      } else {
+        log("warn", "已达 fork 上限，放弃恢复", {
+          sessionKey,
+          attempts,
+        })
+      }
+    }
+
+    // 正常错误处理：优先使用 session.error 事件中的实际错误信息
     const thrownError = err instanceof Error ? err.message : String(err)
-    const errorMessage = sessionError || thrownError
+    const errorMessage = sessionError?.message || thrownError
 
     log("error", "对话处理失败", {
       sessionId: session.id,
-      sessionKey: sessionKey.replace(/-[^-]+$/, "-***"),
+      sessionKey,
       chatType,
       error: thrownError,
       ...(sessionError
-        ? { sessionError }
+        ? { sessionError: sessionError.message }
         : { sseRaceMiss: true }),
     })
     const msg = "❌ " + errorMessage
@@ -181,8 +295,45 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   } finally {
     done = true
     if (timer) clearTimeout(timer)
-    unregisterPending(session.id)
+    unregisterPending(activeSessionId)
   }
+}
+
+/**
+ * 从错误字段中提取 providerID，查询可用模型列表，返回最新可用模型
+ */
+async function resolveLatestModel(
+  client: OpencodeClient,
+  errorFields: string[],
+  directory?: string,
+): Promise<{ providerID: string; modelID: string } | undefined> {
+  const pattern = /model not found:?\s*(\w[\w-]*)\//i
+  const rawProviderID = errorFields.map(f => pattern.exec(f)?.[1]).find(Boolean)
+  if (!rawProviderID) return undefined
+  // provider API 的 id 是小写的，错误消息可能是 "OpenAI/..." 等混合大小写
+  const providerID = rawProviderID.toLowerCase()
+
+  const query = directory ? { directory } : undefined
+  const { data } = await client.provider.list({ query })
+  if (!data) return undefined
+
+  // 优先使用该 provider 的默认模型
+  const defaultModelID = data.default?.[providerID]
+  if (defaultModelID) {
+    return { providerID, modelID: defaultModelID }
+  }
+
+  // Fallback：从 provider 的模型列表中选最新模型（优先 tool_call，其次任意非 deprecated）
+  const provider = data.all?.find(p => p.id === providerID)
+  if (!provider?.models) return undefined
+
+  const sortedModels = Object.values(provider.models)
+    .filter(m => m.status !== "deprecated")
+    .sort((a, b) => b.release_date.localeCompare(a.release_date))
+
+  if (sortedModels.length === 0) return undefined
+  const best = sortedModels.find(m => m.tool_call) ?? sortedModels[0]
+  return { providerID, modelID: best.id }
 }
 
 /**
