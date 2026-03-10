@@ -35,6 +35,10 @@ const SESSION_ERROR_TTL_MS = 30_000
 /** 模型降级覆盖：fork 恢复后存储可用模型，供 chat.ts prompt 时使用 */
 const modelOverrides = new Map<string, { providerID: string; modelID: string }>()
 
+/** 正在进行的 fork 恢复 Promise，供 chat.ts await */
+const pendingRecoveries = new Map<string, Promise<{ sessionId: string; modelOverride?: { providerID: string; modelID: string } } | undefined>>()
+const RECOVERY_TTL_MS = 30_000
+
 /** Fork 次数限制：防止模型不兼容时无限 fork 循环 */
 const forkAttempts = new Map<string, number>()
 const forkAttemptTimeouts = new Map<string, NodeJS.Timeout>()
@@ -62,6 +66,13 @@ function setForkAttempts(sessionKey: string, count: number): void {
     forkAttemptTimeouts.delete(sessionKey)
   }, FORK_ATTEMPTS_TTL_MS)
   forkAttemptTimeouts.set(sessionKey, timeoutId)
+}
+
+/**
+ * 获取正在进行的 fork 恢复 Promise（供 chat.ts catch 块 await）
+ */
+export function getPendingRecovery(sessionId: string): Promise<{ sessionId: string; modelOverride?: { providerID: string; modelID: string } } | undefined> | undefined {
+  return pendingRecoveries.get(sessionId)
 }
 
 export function getModelOverride(sessionKey: string): { providerID: string; modelID: string } | undefined {
@@ -221,44 +232,59 @@ export async function handleEvent(
             deps.log("warn", "已达 fork 上限，放弃恢复", { sessionKey: maskKey(sessionKey), attempts })
           } else {
             setForkAttempts(sessionKey, attempts + 1)
-            try {
-              const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
-              setCachedSession(sessionKey, newSession)
-              // 清除旧 override 后解析最新可用模型
-              modelOverrides.delete(sessionKey)
+            const recoveryPromise = (async (): Promise<{ sessionId: string; modelOverride?: { providerID: string; modelID: string } } | undefined> => {
               try {
-                const fallbackModel = await resolveLatestModel(deps.client, props.error ?? errMsg, deps.directory)
-                if (fallbackModel) {
-                  modelOverrides.set(sessionKey, fallbackModel)
-                  deps.log("info", "已解析降级模型", {
+                const newSession = await forkOrCreateSession(deps.client, sessionId, sessionKey, deps.directory, deps.log)
+                setCachedSession(sessionKey, newSession)
+                // 清除旧 override 后解析最新可用模型
+                modelOverrides.delete(sessionKey)
+                let fallbackModel: { providerID: string; modelID: string } | undefined
+                try {
+                  fallbackModel = await resolveLatestModel(deps.client, props.error ?? errMsg, deps.directory)
+                  if (fallbackModel) {
+                    modelOverrides.set(sessionKey, fallbackModel)
+                    deps.log("info", "已解析降级模型", {
+                      sessionKey: maskKey(sessionKey),
+                      providerID: fallbackModel.providerID,
+                      modelID: fallbackModel.modelID,
+                    })
+                  }
+                } catch (modelErr) {
+                  deps.log("warn", "解析降级模型失败，将使用默认模型", {
                     sessionKey: maskKey(sessionKey),
-                    providerID: fallbackModel.providerID,
-                    modelID: fallbackModel.modelID,
+                    error: modelErr instanceof Error ? modelErr.message : String(modelErr),
                   })
                 }
-              } catch (modelErr) {
-                deps.log("warn", "解析降级模型失败，将使用默认模型", {
+
+                deps.log("warn", "模型不兼容，已恢复会话", {
+                  oldSessionId: sessionId,
+                  newSessionId: newSession.id,
                   sessionKey: maskKey(sessionKey),
-                  error: modelErr instanceof Error ? modelErr.message : String(modelErr),
+                  forkAttempt: attempts + 1,
                 })
+
+                // 迁移 pending（如果有占位消息在旧 session 上）
+                migratePending(sessionId, newSession.id)
+
+                return { sessionId: newSession.id, modelOverride: fallbackModel }
+              } catch (recoverErr) {
+                deps.log("error", "会话恢复失败", {
+                  sessionId,
+                  sessionKey: maskKey(sessionKey),
+                  error: recoverErr instanceof Error ? recoverErr.message : String(recoverErr),
+                })
+                return undefined
+              } finally {
+                pendingRecoveries.delete(sessionId)
               }
+            })()
 
-              deps.log("warn", "模型不兼容，已恢复会话", {
-                oldSessionId: sessionId,
-                newSessionId: newSession.id,
-                sessionKey: maskKey(sessionKey),
-                forkAttempt: attempts + 1,
-              })
+            pendingRecoveries.set(sessionId, recoveryPromise)
+            // TTL 防护：即使 Promise 永不 resolve 也会被清理
+            setTimeout(() => pendingRecoveries.delete(sessionId), RECOVERY_TTL_MS)
 
-              // 迁移 pending（如果有占位消息在旧 session 上）
-              migratePending(sessionId, newSession.id)
-            } catch (recoverErr) {
-              deps.log("error", "会话恢复失败", {
-                sessionId,
-                sessionKey: maskKey(sessionKey),
-                error: recoverErr instanceof Error ? recoverErr.message : String(recoverErr),
-              })
-            }
+            // 仍然 await 以确保日志顺序
+            await recoveryPromise
           }
         }
       }

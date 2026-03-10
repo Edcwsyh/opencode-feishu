@@ -4,7 +4,7 @@
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import * as sender from "../feishu/sender.js"
-import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts, getModelOverride, clearModelOverride } from "./event.js"
+import { registerPending, unregisterPending, getSessionError, clearSessionError, clearForkAttempts, getModelOverride, clearModelOverride, getPendingRecovery } from "./event.js"
 import { buildSessionKey, getOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
@@ -160,6 +160,46 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   } catch (err) {
     // 等待一个微小窗口，让可能在途的 session.error 事件有机会到达并被处理
     await new Promise(r => setTimeout(r, SSE_RACE_WAIT_MS))
+
+    // 检查是否有正在进行的 fork 恢复（模型不兼容错误）
+    const recovery = getPendingRecovery(session.id)
+    if (recovery) {
+      try {
+        const result = await recovery
+        if (result) {
+          log("info", "fork 恢复成功，重试 prompt", {
+            oldSessionId: session.id,
+            newSessionId: result.sessionId,
+          })
+          // 恢复成功：用新 session + 新模型重试 prompt
+          const retryBody = {
+            ...baseBody,
+            ...(result.modelOverride ? { model: result.modelOverride } : {}),
+          }
+          await client.session.prompt({
+            path: { id: result.sessionId },
+            query,
+            body: retryBody,
+          })
+          // 迁移 pending 占位消息注册到新 session（event.ts 已迁移，这里确保注册正确）
+          unregisterPending(session.id)
+          if (placeholderId) {
+            registerPending(result.sessionId, { chatId, placeholderId, feishuClient })
+          }
+
+          const finalText = await pollForResponse(client, result.sessionId, { timeout, pollInterval, stablePolls, query })
+          clearForkAttempts(sessionKey)
+          clearModelOverride(sessionKey)
+          await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
+          return // 恢复成功，不发送错误
+        }
+      } catch (retryErr) {
+        // 重试也失败：fall through 到正常错误处理
+        log("warn", "恢复后重试失败", {
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        })
+      }
+    }
 
     // 优先使用 session.error 事件中的实际错误信息（prompt() 常抛出无意义的 JSON 解析错误）
     const sessionError = getSessionError(session.id)
