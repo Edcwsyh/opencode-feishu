@@ -64,7 +64,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     messageType,
     shouldReply,
     content: content.slice(0, 500),
-    parts,
+    partTypes: parts.map(p => p.type),
   })
 
   const baseBody = { parts }
