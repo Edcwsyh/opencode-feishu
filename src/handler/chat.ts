@@ -63,8 +63,8 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     senderId,
     messageType,
     shouldReply,
-    content: content.slice(0, 500),
-    partTypes: parts.map(p => p.type),
+    content,
+    parts,
   })
 
   const baseBody = { parts }
@@ -139,8 +139,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
           log("info", "自动提示响应", {
             sessionKey: maskKey(sessionKey),
             iteration: i + 1,
-            output: text.slice(0, 500),
-            outputLength: text.length,
+            output: text,
           })
           await sender.sendTextMessage(feishuClient, chatId, text)
         }
@@ -173,8 +172,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     log("info", "模型响应完成", {
       sessionKey: maskKey(sessionKey),
       sessionId: session.id,
-      output: finalText ? finalText.slice(0, 500) : "(empty)",
-      outputLength: finalText?.length ?? 0,
+      output: finalText || "(empty)",
     })
 
     // prompt 成功：重置 fork 计数
@@ -247,8 +245,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
           log("info", "恢复后模型响应完成", {
             sessionKey: maskKey(sessionKey),
             newSessionId: newSession.id,
-            output: finalText ? finalText.slice(0, 500) : "(empty)",
-            outputLength: finalText?.length ?? 0,
+            output: finalText || "(empty)",
           })
 
           clearForkAttempts(sessionKey)
