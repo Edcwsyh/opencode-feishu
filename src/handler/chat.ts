@@ -260,13 +260,15 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         } catch (recoveryErr) {
           const errMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
           // 恢复重试的 pollForResponse 也可能检测到 SSE 错误
-          if (recoveryErr instanceof SessionErrorDetected) {
-            sessionError = recoveryErr.sessionError
+          const sseError = recoveryErr instanceof SessionErrorDetected
+            ? recoveryErr.sessionError
+            : getSessionError(session.id)
+
+          if (sseError) {
+            sessionError = sseError
             clearSessionError(session.id)
           } else {
-            const retryError = getSessionError(session.id)
-            if (retryError) clearSessionError(session.id)
-            sessionError = retryError ?? { message: errMsg, fields: [] }
+            sessionError = { message: errMsg, fields: [] }
           }
           log("error", "模型恢复失败", {
             sessionId: session.id,
