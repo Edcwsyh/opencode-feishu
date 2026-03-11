@@ -121,7 +121,7 @@ export function extractErrorFields(error: unknown): string[] {
       .filter((v): v is string => typeof v === "string" && v.length > 0)
     // 提取 data.message 嵌套字段（SDK UnknownError 的标准结构）
     if (e.data && typeof e.data === "object" && "message" in e.data) {
-      const dataMsg = (e.data as { message?: unknown }).message
+      const dataMsg = e.data.message
       if (typeof dataMsg === "string" && dataMsg.length > 0) fields.push(dataMsg)
     }
     return [...new Set(fields)]
