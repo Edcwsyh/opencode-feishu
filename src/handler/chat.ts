@@ -203,6 +203,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       }
     }
 
+    if (sessionError) {
+      log("info", "错误字段检查", {
+        sessionKey,
+        fields: sessionError.fields,
+        isModel: isModelError(sessionError.fields),
+      })
+    }
+
     // 模型不兼容错误：在同一 session 上用可用模型重试（session 未损坏，model 是 per-request）
     if (sessionError && isModelError(sessionError.fields)) {
       const attempts = getRetryAttempts(sessionKey)
