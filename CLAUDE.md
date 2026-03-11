@@ -244,7 +244,8 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 ### 会话错误处理（三层架构）
 
 **L1 错误提取**（event.ts）：从 `session.error` SSE 事件提取有意义的错误消息
-- 提取优先级：`e.message` → `data.message` → `e.type` → `e.name` → 兜底文案
+- `errMsg` 提取优先级：`e.message` → `data.message` → `e.type` → `e.name` → 兜底文案
+- `extractErrorFields()`：全量提取错误对象所有顶层 string 值（`Object.values` 策略，不维护字段名白名单），加上 `data.message` 嵌套字段
 - SDK `UnknownError` 类型的 `data.message` 是 required 字段，存放原始错误名
 
 **L2 轮询期间 SSE 错误检测**（chat.ts pollForResponse）：每次 poll 周期检查 `getSessionError()`

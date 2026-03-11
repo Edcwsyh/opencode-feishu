@@ -102,18 +102,29 @@ export function unregisterPending(sessionId: string): void {
 }
 
 /**
- * 从 error 对象提取所有文本字段（message/type/name/data.message）
+ * 从 error 对象提取所有可用于模式匹配的文本字段。
+ *
+ * 策略：显式提取 message/type/name（可能是不可枚举属性）+
+ * Object.values 提取所有可枚举 string 值 + data.message 嵌套字段。
+ * 原生 Error 的 message/name 是不可枚举的，Object.values 无法获取，
+ * 因此必须显式提取。最终用 Set 去重。
  */
 export function extractErrorFields(error: unknown): string[] {
   if (typeof error === "string") return [error]
   if (error && typeof error === "object") {
     const e = error as Record<string, unknown>
-    const fields = [e.type, e.name, e.message].filter(Boolean).map(String)
+    // 显式提取可能不可枚举的标准 Error 属性
+    const explicit = [e.message, e.type, e.name]
+    // 提取所有可枚举顶层 string 值（覆盖 code 及未来新增字段）
+    const enumerable = Object.values(e)
+    const fields = [...explicit, ...enumerable]
+      .filter((v): v is string => typeof v === "string" && v.length > 0)
+    // 提取 data.message 嵌套字段（SDK UnknownError 的标准结构）
     if (e.data && typeof e.data === "object" && "message" in e.data) {
-      const dataMsg = (e.data as { message?: unknown }).message
-      if (dataMsg) fields.push(String(dataMsg))
+      const dataMsg = e.data.message
+      if (typeof dataMsg === "string" && dataMsg.length > 0) fields.push(dataMsg)
     }
-    return fields
+    return [...new Set(fields)]
   }
   return [String(error)]
 }
