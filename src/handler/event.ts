@@ -134,7 +134,8 @@ function collectStrings(obj: unknown, out: string[], maxDepth: number): void {
   // 提取所有可枚举值：string 直接收集，object 递归下探
   for (const v of Object.values(e)) {
     if (typeof v === "string" && v.length > 0) out.push(v)
-    else if (v && typeof v === "object" && !Array.isArray(v)) collectStrings(v, out, maxDepth - 1)
+    else if (Array.isArray(v)) { for (const item of v) collectStrings(item, out, maxDepth - 1) }
+    else if (v && typeof v === "object") collectStrings(v, out, maxDepth - 1)
   }
 }
 
