@@ -124,6 +124,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
         log("info", "发送自动提示", { sessionKey, iteration: i + 1 })
 
+        clearSessionError(activeId)
         await client.session.prompt({
           path: { id: activeId },
           query,
@@ -260,15 +261,19 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
         } catch (recoveryErr) {
           const errMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
           // 恢复重试的 pollForResponse 也可能检测到 SSE 错误
-          const sseError = recoveryErr instanceof SessionErrorDetected
-            ? recoveryErr.sessionError
-            : getSessionError(session.id)
-
-          if (sseError) {
-            sessionError = sseError
+          if (recoveryErr instanceof SessionErrorDetected) {
+            sessionError = recoveryErr.sessionError
             clearSessionError(session.id)
           } else {
-            sessionError = { message: errMsg, fields: [] }
+            // prompt() HTTP 错误可能先于 SSE session.error 到达，等待竞态窗口
+            await new Promise((r) => setTimeout(r, SSE_RACE_WAIT_MS))
+            const sseError = getSessionError(session.id)
+            if (sseError) {
+              sessionError = sseError
+              clearSessionError(session.id)
+            } else {
+              sessionError = { message: errMsg, fields: [] }
+            }
           }
           log("error", "模型恢复失败", {
             sessionId: session.id,
