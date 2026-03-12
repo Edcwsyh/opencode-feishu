@@ -40,14 +40,15 @@ export const FeishuPlugin: Plugin = async (ctx) => {
   let gateway: FeishuGatewayResult | null = null
 
   const log: LogFn = (level, message, extra) => {
+    const prefixed = `[feishu] ${message}`
     if (isDebug) {
-      console.error(JSON.stringify({ ts: new Date().toISOString(), service: SERVICE_NAME, level, message, ...extra }))
+      console.error(JSON.stringify({ ts: new Date().toISOString(), service: SERVICE_NAME, level, message: prefixed, ...extra }))
     }
     client.app.log({
       body: {
         service: SERVICE_NAME,
         level,
-        message,
+        message: prefixed,
         extra,
       },
     }).catch(() => {})
