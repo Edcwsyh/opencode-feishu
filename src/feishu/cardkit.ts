@@ -37,9 +37,16 @@ export class CardKitClient {
     } catch (err: unknown) {
       const axiosData = (err as { response?: { data?: unknown } })?.response
         ?.data
-      const detail = axiosData
-        ? JSON.stringify(axiosData)
-        : "no response body"
+      let detail: string
+      if (axiosData) {
+        try {
+          detail = JSON.stringify(axiosData)
+        } catch {
+          detail = String(axiosData)
+        }
+      } else {
+        detail = "no response body"
+      }
       throw new Error(
         `CardKit createCard HTTP 错误: ${err instanceof Error ? err.message : String(err)} | detail: ${detail}`,
       )
