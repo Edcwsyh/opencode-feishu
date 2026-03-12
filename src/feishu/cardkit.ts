@@ -26,16 +26,30 @@ export class CardKitClient {
    * 创建 CardKit 2.0 卡片 → cardId
    */
   async createCard(schema: CardKitSchema): Promise<string> {
-    const res = await this.larkClient.cardkit.v1.card.create({
-      data: {
-        type: "card_json",
-        data: JSON.stringify(schema.data),
-      },
-    })
+    let res
+    try {
+      res = await this.larkClient.cardkit.v1.card.create({
+        data: {
+          type: "card_json",
+          data: JSON.stringify(schema.data),
+        },
+      })
+    } catch (err: unknown) {
+      const axiosData = (err as { response?: { data?: unknown } })?.response
+        ?.data
+      const detail = axiosData
+        ? JSON.stringify(axiosData)
+        : "no response body"
+      throw new Error(
+        `CardKit createCard HTTP 错误: ${err instanceof Error ? err.message : String(err)} | detail: ${detail}`,
+      )
+    }
 
     const cardId = res?.data?.card_id
     if (!cardId) {
-      throw new Error(`CardKit createCard 失败: ${res?.msg ?? "unknown"} (code: ${res?.code})`)
+      throw new Error(
+        `CardKit createCard 失败: ${res?.msg ?? "unknown"} (code: ${res?.code})`,
+      )
     }
 
     return cardId
