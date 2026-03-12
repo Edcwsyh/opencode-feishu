@@ -38,6 +38,10 @@ export function handlePermissionRequested(
   chatId: string,
   deps: InteractiveDeps,
 ): void {
+  if (!deps.v2Client) {
+    deps.log("warn", "v2Client 未配置，跳过权限卡片发送", { requestId: String(request.id ?? "") })
+    return
+  }
   const requestId = String(request.id ?? "")
   if (!requestId || !markSeen(requestId)) return
 
@@ -55,6 +59,10 @@ export function handleQuestionRequested(
   chatId: string,
   deps: InteractiveDeps,
 ): void {
+  if (!deps.v2Client) {
+    deps.log("warn", "v2Client 未配置，跳过问答卡片发送", { requestId: String(request.id ?? "") })
+    return
+  }
   const requestId = String(request.id ?? "")
   if (!requestId || !markSeen(requestId)) return
 
@@ -82,7 +90,13 @@ export async function handleCardAction(
   action: CardActionData,
   deps: InteractiveDeps,
 ): Promise<void> {
-  if (!action.actionValue || !deps.v2Client) return
+  if (!action.actionValue) return
+  if (!deps.v2Client) {
+    deps.log("warn", "v2Client 未配置，交互回调被忽略（按钮点击不会转发到 OpenCode）", {
+      actionValue: action.actionValue,
+    })
+    return
+  }
 
   type PermissionReplyValue = { action: "permission_reply"; requestId: string; reply: string }
   type QuestionReplyValue = { action: "question_reply"; requestId: string; answers: string[][] }

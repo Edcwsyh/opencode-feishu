@@ -148,7 +148,7 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
           operator?: { open_id?: string }
         }
         const action: CardActionData = {
-          actionValue: typeof evt.action?.value === "object"
+          actionValue: (typeof evt.action?.value === "object" && evt.action.value !== null)
             ? JSON.stringify(evt.action.value)
             : String(evt.action?.value ?? ""),
           actionTag: String(evt.action?.tag ?? ""),

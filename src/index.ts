@@ -99,7 +99,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
       const interactiveDeps: InteractiveDeps = {
         feishuClient: larkClient,
         log,
-        v2Client: v2Client ?? undefined,
+        v2Client,
       }
       await enqueueMessage(msgCtx, {
         config: resolvedConfig,
@@ -129,7 +129,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
       const interactiveDeps: InteractiveDeps = {
         feishuClient: larkClient,
         log,
-        v2Client: v2Client ?? undefined,
+        v2Client,
       }
       await handleCardAction(action, interactiveDeps)
     },

@@ -200,7 +200,7 @@ export async function handleEvent(
 
       const partSessionId = part.sessionID as string
 
-      // Emit tool-state-changed for tool parts
+      // Emit tool-state-changed for tool parts (skip text-updated — tool parts have no text content)
       if (part.type === "tool") {
         const p = part as Record<string, unknown>
         const toolName = String(p.toolName ?? p.name ?? "unknown")
@@ -219,6 +219,7 @@ export async function handleEvent(
             state: toolState,
           })
         }
+        break
       }
 
       // delta 是增量文本，part.text 是全量文本
