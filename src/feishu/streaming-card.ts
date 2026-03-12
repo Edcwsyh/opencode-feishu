@@ -73,6 +73,15 @@ export class StreamingCard {
   }
 
   /**
+   * 替换整个文本内容（用于 snapshot-style 事件）
+   */
+  async replaceText(fullText: string): Promise<void> {
+    if (this.closed || !this.cardId) return
+    this.textBuffer = fullText
+    this.enqueue(() => this.doUpdateContent())
+  }
+
+  /**
    * 更新工具状态到 tools 元素
    */
   async setToolStatus(callID: string, tool: string, state: "running" | "completed" | "error"): Promise<void> {

@@ -215,7 +215,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
     cardUnsub = subscribe(activeSessionId, (action) => {
       switch (action.type) {
         case "text-updated":
-          if (card && action.delta) card.updateText(action.delta)
+          if (card) {
+            if (action.delta) {
+              card.updateText(action.delta)
+            } else if (action.fullText) {
+              // snapshot-style 事件：用 fullText 替换整个 buffer
+              card.replaceText(action.fullText)
+            }
+          }
           break
         case "tool-state-changed":
           if (card) card.setToolStatus(action.callID, action.tool, action.state)
