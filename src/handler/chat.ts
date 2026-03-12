@@ -8,15 +8,12 @@ import {
   registerPending, unregisterPending,
   getSessionError, clearSessionError,
   clearRetryAttempts, getRetryAttempts, setRetryAttempts, MAX_RETRY_ATTEMPTS,
-  isModelError, extractErrorFields,
+  isModelError,
   type CachedSessionError,
 } from "./event.js"
 import { buildSessionKey, getOrCreateSession } from "../session.js"
 import { extractParts, type PromptPart } from "../feishu/content-extractor.js"
 import type * as Lark from "@larksuiteoapi/node-sdk"
-
-/** SSE 事件竞态等待窗口（ms），让 session.error 有机会在 HTTP 错误后到达 */
-const SSE_RACE_WAIT_MS = 100
 
 /** 每个会话的活跃自动提示循环，用于用户介入时中断 */
 const activeAutoPrompts = new Map<string, AbortController>()
@@ -29,7 +26,7 @@ export interface ChatDeps {
   directory: string
 }
 
-export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Promise<void> {
+export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, signal?: AbortSignal): Promise<void> {
   const { content, chatId, chatType, senderId, shouldReply, messageType, rawContent, messageId } = ctx
   if (!content.trim() && messageType === "text") return
 
@@ -68,7 +65,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
   // 静默监听模式：消息发给 OpenCode 作为上下文，不触发 AI 回复
   if (!shouldReply) {
     try {
-      await client.session.prompt({
+      await client.session.promptAsync({
         path: { id: session.id },
         query,
         body: { ...baseBody, noReply: true },
@@ -161,13 +158,13 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
     // 清除前次遗留的 session error 缓存，避免 pollForResponse 误检测旧错误
     clearSessionError(session.id)
 
-    await client.session.prompt({
+    await client.session.promptAsync({
       path: { id: session.id },
       query,
       body: baseBody,
     })
 
-    const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
+    const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query, signal })
 
     log("info", "模型响应完成", {
       sessionKey,
@@ -182,25 +179,21 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
 
     await runAutoPromptLoop(session.id)
   } catch (err) {
-    // pollForResponse 检测到 SSE 错误时直接携带 sessionError，无需竞态等待
+    // AbortError = 被新消息中断，静默退出
+    if (err instanceof Error && err.name === "AbortError") {
+      log("info", "处理被中断", { sessionKey, sessionId: session.id })
+      return
+    }
+
+    // pollForResponse 检测到 SSE 错误时直接携带 sessionError
     let sessionError: CachedSessionError | undefined
     if (err instanceof SessionErrorDetected) {
       sessionError = err.sessionError
       clearSessionError(session.id)
     } else {
-      // 非 SSE 检测的错误：等待微小窗口让 session.error 事件到达
-      await new Promise(r => setTimeout(r, SSE_RACE_WAIT_MS))
+      // promptAsync 的 HTTP 级错误（400/404），检查是否有 SSE 错误
       sessionError = getSessionError(session.id)
       clearSessionError(session.id)
-
-      // SSE 缓存未命中时，尝试从 prompt() 抛出的错误中提取模型错误信息
-      if (!sessionError) {
-        const thrownFields = extractErrorFields(err)
-        if (isModelError(thrownFields)) {
-          const thrownMsg = err instanceof Error ? err.message : String(err)
-          sessionError = { message: thrownMsg, fields: thrownFields }
-        }
-      }
     }
 
     if (sessionError) {
@@ -211,12 +204,11 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       })
     }
 
-    // 模型不兼容错误：在同一 session 上用可用模型重试（session 未损坏，model 是 per-request）
+    // 模型不兼容错误：用可用模型重试
     if (sessionError && isModelError(sessionError.fields)) {
       const attempts = getRetryAttempts(sessionKey)
       if (attempts < MAX_RETRY_ATTEMPTS) {
         try {
-          // 使用全局配置的默认模型恢复（FR-005）
           let modelOverride: { providerID: string; modelID: string } | undefined
           try {
             modelOverride = await getGlobalDefaultModel(client, directory)
@@ -228,7 +220,6 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
           }
           if (!modelOverride) {
             log("warn", "全局默认模型未配置，放弃恢复", { sessionKey })
-            // fall through 到正常错误处理
           } else {
             setRetryAttempts(sessionKey, attempts + 1)
             log("info", "使用全局默认模型恢复", {
@@ -237,15 +228,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
               modelID: modelOverride.modelID,
             })
 
-            // 清除旧错误，在同一 session 上用可用模型重试 prompt（不 fork，保留完整对话历史）
             clearSessionError(session.id)
-            await client.session.prompt({
+            await client.session.promptAsync({
               path: { id: session.id },
               query,
               body: { ...baseBody, model: modelOverride },
             })
 
-            const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query })
+            const finalText = await pollForResponse(client, session.id, { timeout, pollInterval, stablePolls, query, signal })
 
             log("info", "模型恢复后响应完成", {
               sessionKey,
@@ -267,21 +257,23 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
             return
           }
         } catch (recoveryErr) {
+          // AbortError during recovery = interrupted
+          if (recoveryErr instanceof Error && recoveryErr.name === "AbortError") {
+            log("info", "模型恢复被中断", { sessionKey })
+            return
+          }
+
           const errMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
-          // 恢复重试的 pollForResponse 也可能检测到 SSE 错误
           if (recoveryErr instanceof SessionErrorDetected) {
             sessionError = recoveryErr.sessionError
             clearSessionError(session.id)
           } else {
-            // prompt() HTTP 错误可能先于 SSE session.error 到达，等待竞态窗口
-            await new Promise((r) => setTimeout(r, SSE_RACE_WAIT_MS))
             const sseError = getSessionError(session.id)
             if (sseError) {
               sessionError = sseError
               clearSessionError(session.id)
             } else {
-              const thrownFields = extractErrorFields(recoveryErr)
-              sessionError = { message: errMsg, fields: thrownFields }
+              sessionError = { message: errMsg, fields: [] }
             }
           }
           log("error", "模型恢复失败", {
@@ -289,7 +281,6 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
             sessionKey,
             error: errMsg,
           })
-          // fall through 到正常错误处理
         }
       } else {
         log("warn", "已达重试上限，放弃恢复", {
@@ -299,7 +290,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       }
     }
 
-    // 正常错误处理：优先使用 session.error 事件中的实际错误信息
+    // 正常错误处理
     const thrownError = err instanceof Error ? err.message : String(err)
     const errorMessage = sessionError?.message || thrownError
 
@@ -310,7 +301,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps): Pro
       error: thrownError,
       ...(sessionError
         ? { sessionError: sessionError.message }
-        : { sseRaceMiss: true }),
+        : {}),
     })
     const msg = "❌ " + errorMessage
     await replyOrUpdate(feishuClient, chatId, placeholderId, msg)

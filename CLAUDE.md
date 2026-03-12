@@ -108,12 +108,15 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
     ├── config 钩子 → 读取 opencode.json 中的 feishu 配置
     │   ├── fetchBotOpenId() → 获取 bot open_id
     │   └── startFeishuGateway() → 启动 WebSocket 长连接
-    │       ├── im.message.receive_v1 → handleChat()
-    │       │   ├── 静默监听: client.session.prompt({ noReply: true })
-    │       │   └── 主动回复: client.session.prompt() → 轮询 → sender
+    │       ├── im.message.receive_v1 → enqueueMessage() [session-queue]
+    │       │   ├── shouldReply=false → handleChat() 静默转发（绕过队列）
+    │       │   ├── P2P + shouldReply=true → 可中断策略（abort + 立即处理新消息）
+    │       │   └── Group + shouldReply=true → 串行排队（FIFO 顺序依次处理）
+    │       │       └── handleChat(ctx, deps, signal)
+    │       │           └── promptAsync() → 轮询 → sender
     │       └── im.chat.member.bot.added_v1 → ingestGroupHistory()
     └── event 钩子 → handleEvent()
-        ├── message.part.updated → 实时更新飞书占位消息
+        ├── message.part.updated → 实时更新飞书占位消息（messageID 过滤）
         └── session.error → 缓存错误 + 模型不兼容时自动恢复会话
 ```
 
@@ -132,16 +135,25 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 - 群消息 @提及过滤（通过 `group-filter.ts`）
 - 处理 `im.chat.member.bot.added_v1` 用于历史摄入
 
+**消息队列调度器 (`src/handler/session-queue.ts`):**
+- per-sessionKey 并发控制，防止占位消息竞态覆盖
+- P2P 可中断策略：`AbortController.abort()` + `session.abort()` 中断当前处理
+- 群聊串行排队策略：FIFO 顺序依次处理，所有 @bot 消息都得到回复
+- 静默消息（shouldReply=false）完全绕过队列
+- 暴露 `enqueueMessage()` 作为唯一入口
+
 **对话处理器 (`src/handler/chat.ts`):**
-- 直接使用 `client.session.list()/create()/prompt()/messages()` 管理会话
+- 使用 `client.session.promptAsync()` 异步发送消息（不阻塞）
+- 接受可选 `signal?: AbortSignal` 参数，支持被队列中断
 - 会话键格式：`feishu-p2p-<userId>` 或 `feishu-group-<chatId>`
 - 会话标题格式：`Feishu-<sessionKey>-<timestamp>`
-- 静默监听模式：`noReply: true`
+- 静默监听模式：`promptAsync({ noReply: true })`
 - 主动回复模式：占位消息 → 轮询 → 最终回复
 - 自动提示模式：响应完成后循环发送"继续" → 轮询 → 回复，直到 maxIterations 或用户中断
+- AbortError 处理：被中断时静默退出，不向用户发送错误
 
 **事件处理器 (`src/handler/event.ts`):**
-- 处理 `message.part.updated` 实时更新占位消息
+- 处理 `message.part.updated` 实时更新占位消息（通过 messageID 过滤防止事件串扰）
 - 处理 `session.error`：提取错误消息、缓存到 `sessionErrors` Map、检测模型不兼容错误
 - `isModelError()`：双层匹配策略 — 层1 精确子串（已知错误码），层2 关键词组合（"model" + 否定词，覆盖未知变体）
 - 管理 `pendingBySession` 映射（sessionId → 飞书占位消息）
@@ -259,11 +271,17 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 - 重试计数器：每 sessionKey 最多重试 2 次，防止无限循环；成功后重置计数
 - 全局默认模型未配置时，直接向用户显示错误，不重试
 
-**L4 竞态协调**（chat.ts catch 块）：prompt() HTTP 响应和 SSE session.error 并行到达
-- `SessionErrorDetected` 异常：来自 pollForResponse 的 SSE 检测，无需竞态等待
-- 非 SSE 检测错误：catch 块等待 100ms（`SSE_RACE_WAIT_MS`）让 SSE 事件先到达
-- 优先使用 `getSessionError()` 缓存的真实错误，而非 prompt() 抛出的 JSON 解析错误
+**L4 并发控制**（session-queue.ts）：per-sessionKey 消息队列防止竞态
+- 私聊可中断：`AbortController.abort()` + `session.abort()` 中断当前处理，立即处理新消息
+- 群聊串行排队：FIFO 顺序依次处理，所有 @bot 消息都得到回复
+- 静默消息绕过队列：`shouldReply=false` 直接转发，不受队列影响
+- `AbortError` 处理：被中断时静默退出，不向用户发送错误
+- 使用 `promptAsync()` 异步发送（不再有 prompt() HTTP 错误与 SSE 的竞态问题）
 - 错误消息统一由 chat.ts catch 块发送给用户（event.ts 不发送，避免双重发送）
+
+**L5 SSE 事件过滤**（event.ts）：messageID 防止事件串扰
+- `PendingReplyPayload.expectedMessageId`：首个 SSE 事件锁定 messageID，后续只接受匹配的事件
+- 串行队列保证首个事件属于当前请求
 
 ## 日志记录
 

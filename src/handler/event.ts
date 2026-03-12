@@ -12,6 +12,8 @@ export interface PendingReplyPayload {
   placeholderId: string
   feishuClient: InstanceType<typeof Lark.Client>
   textBuffer: string
+  /** 锁定的 assistant messageID，首个 SSE 事件设置，后续只接受匹配的事件 */
+  expectedMessageId?: string
 }
 
 export interface EventDeps {
@@ -92,9 +94,9 @@ function setSessionError(sessionId: string, message: string, fields: string[]): 
 
 export function registerPending(
   sessionId: string,
-  payload: Omit<PendingReplyPayload, "textBuffer">,
+  payload: Omit<PendingReplyPayload, "textBuffer" | "expectedMessageId">,
 ): void {
-  pendingBySession.set(sessionId, { ...payload, textBuffer: "" })
+  pendingBySession.set(sessionId, { ...payload, textBuffer: "", expectedMessageId: undefined })
 }
 
 export function unregisterPending(sessionId: string): void {
@@ -179,6 +181,18 @@ export async function handleEvent(
 
       const payload = pendingBySession.get(sessionId)
       if (!payload) break
+
+      // messageID 过滤：首个事件锁定 messageID，后续只接受匹配的事件
+      const messageId = part.messageID as string | undefined
+      if (messageId) {
+        if (!payload.expectedMessageId) {
+          // 锁定首个收到的 messageID
+          payload.expectedMessageId = messageId
+        } else if (payload.expectedMessageId !== messageId) {
+          // 不匹配当前锁定的 messageID，丢弃事件
+          break
+        }
+      }
 
       // delta 是增量文本，part.text 是全量文本
       const delta = (event.properties as { delta?: string }).delta

@@ -28,6 +28,13 @@ function generateSessionTitle(sessionKey: string): string {
 }
 
 /**
+ * 获取缓存中的会话（不创建新会话）
+ */
+export function getCachedSession(sessionKey: string): { id: string; title?: string } | undefined {
+  return sessionCache.get(sessionKey)
+}
+
+/**
  * 查找或创建 OpenCode 会话（按标题前缀匹配）
  */
 export async function getOrCreateSession(
