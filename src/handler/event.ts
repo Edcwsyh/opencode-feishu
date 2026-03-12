@@ -192,6 +192,9 @@ export async function handleEvent(
           // 不匹配当前锁定的 messageID，丢弃事件
           break
         }
+      } else if (payload.expectedMessageId) {
+        // 已锁定 messageID 但当前事件缺少 messageID，丢弃防止污染
+        break
       }
 
       // delta 是增量文本，part.text 是全量文本
