@@ -32,6 +32,34 @@ export interface ChatDeps {
   interactiveDeps?: InteractiveDeps
 }
 
+/** 最终回复：关闭流式卡片或更新占位消息 */
+async function finalizeReply(
+  streamingCard: StreamingCard | undefined,
+  feishuClient: InstanceType<typeof Lark.Client>,
+  chatId: string,
+  placeholderId: string,
+  text: string,
+): Promise<void> {
+  if (streamingCard) {
+    await streamingCard.close(text)
+  } else {
+    await replyOrUpdate(feishuClient, chatId, placeholderId, text)
+  }
+}
+
+/** 中断清理：删除流式卡片或占位消息 */
+async function abortCleanup(
+  streamingCard: StreamingCard | undefined,
+  feishuClient: InstanceType<typeof Lark.Client>,
+  placeholderId: string,
+): Promise<void> {
+  if (streamingCard) {
+    await streamingCard.destroy()
+  } else if (placeholderId) {
+    await sender.deleteMessage(feishuClient, placeholderId).catch(() => {})
+  }
+}
+
 export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, signal?: AbortSignal): Promise<void> {
   const { content, chatId, chatType, senderId, shouldReply, messageType, rawContent, messageId } = ctx
   if (!content.trim() && messageType === "text") return
@@ -223,22 +251,14 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
     // prompt 成功：重置 fork 计数
     clearRetryAttempts(sessionKey)
 
-    if (streamingCard) {
-      await streamingCard.close(finalText || "⚠️ 响应超时")
-    } else {
-      await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
-    }
+    await finalizeReply(streamingCard, feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
     await runAutoPromptLoop(session.id)
   } catch (err) {
     // AbortError = 被新消息中断，清理占位消息后静默退出
     if (err instanceof Error && err.name === "AbortError") {
       log("info", "处理被中断", { sessionKey, sessionId: session.id })
-      if (streamingCard) {
-        await streamingCard.destroy()
-      } else if (placeholderId) {
-        await sender.deleteMessage(feishuClient, placeholderId).catch(() => {})
-      }
+      await abortCleanup(streamingCard, feishuClient, placeholderId)
       return
     }
 
@@ -301,11 +321,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
             })
 
             clearRetryAttempts(sessionKey)
-            if (streamingCard) {
-              await streamingCard.close(finalText || "⚠️ 响应超时")
-            } else {
-              await replyOrUpdate(feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
-            }
+            await finalizeReply(streamingCard, feishuClient, chatId, placeholderId, finalText || "⚠️ 响应超时")
 
             log("info", "模型不兼容恢复成功", {
               sessionId: session.id,
@@ -321,11 +337,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
           // AbortError during recovery = interrupted
           if (recoveryErr instanceof Error && recoveryErr.name === "AbortError") {
             log("info", "模型恢复被中断", { sessionKey })
-            if (streamingCard) {
-              await streamingCard.destroy()
-            } else if (placeholderId) {
-              await sender.deleteMessage(feishuClient, placeholderId).catch(() => {})
-            }
+            await abortCleanup(streamingCard, feishuClient, placeholderId)
             return
           }
 
@@ -369,12 +381,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
         ? { sessionError: sessionError.message }
         : {}),
     })
-    const msg = "❌ " + errorMessage
-    if (streamingCard) {
-      await streamingCard.close(msg)
-    } else {
-      await replyOrUpdate(feishuClient, chatId, placeholderId, msg)
-    }
+    await finalizeReply(streamingCard, feishuClient, chatId, placeholderId, "❌ " + errorMessage)
   } finally {
     done = true
     if (timer) clearTimeout(timer)

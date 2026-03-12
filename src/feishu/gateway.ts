@@ -139,14 +139,22 @@ export function startFeishuGateway(options: FeishuGatewayOptions): FeishuGateway
     },
     "card.action.trigger": async (data: Record<string, unknown>) => {
       try {
+        // 类型化事件 payload（双路径兼容 SDK v1/v2 格式）
+        const evt = data as {
+          action?: { value?: unknown; tag?: string }
+          context?: { open_message_id?: string; open_chat_id?: string }
+          open_message_id?: string
+          open_chat_id?: string
+          operator?: { open_id?: string }
+        }
         const action: CardActionData = {
-          actionValue: typeof (data as any).action?.value === "object"
-            ? JSON.stringify((data as any).action.value)
-            : String((data as any).action?.value ?? ""),
-          actionTag: String((data as any).action?.tag ?? ""),
-          messageId: String((data as any).context?.open_message_id ?? (data as any).open_message_id ?? ""),
-          chatId: String((data as any).context?.open_chat_id ?? (data as any).open_chat_id ?? ""),
-          operatorId: String((data as any).operator?.open_id ?? ""),
+          actionValue: typeof evt.action?.value === "object"
+            ? JSON.stringify(evt.action.value)
+            : String(evt.action?.value ?? ""),
+          actionTag: String(evt.action?.tag ?? ""),
+          messageId: String(evt.context?.open_message_id ?? evt.open_message_id ?? ""),
+          chatId: String(evt.context?.open_chat_id ?? evt.open_chat_id ?? ""),
+          operatorId: String(evt.operator?.open_id ?? ""),
         }
 
         // fire-and-forget（必须 3s 内返回）
