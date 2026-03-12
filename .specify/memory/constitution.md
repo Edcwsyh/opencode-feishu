@@ -1,9 +1,9 @@
 <!--
 Sync Impact Report
 ==================
-- Version change: 2.4.0 → 2.5.0 (MINOR)
-- Modified principles: 九（错误处理）— 增加轮询 SSE 检测 + 全局默认模型恢复
-- Added sections: None
+- Version change: 2.5.0 → 2.6.0 (MINOR)
+- Modified principles: None
+- Added sections: 十三（飞书卡片规范）— 引用官方 CardKit API 文档
 - Removed sections: None
 - Templates requiring updates: None
 - Follow-up TODOs: None
@@ -105,10 +105,19 @@ opencode-feishu 是 OpenCode 的飞书插件，不是独立服务。
 - main 分支受保护，所有变更 MUST 通过 PR 合并（release commit 除外）
 - Gemini Code Assist 作为 PR reviewer 自动触发
 
+### 十三、飞书卡片规范
+飞书卡片相关开发 MUST 遵循飞书开放平台官方文档。
+- CardKit 2.0 创建卡片 API：https://open.larkenterprise.com/document/cardkit-v1/card/create?appId=cli_a90943a30978dbcb
+- API 参数（如 `type` 字段的合法值 `card_json` / `template`）以官方文档为准，
+  不得使用未文档化的值
+- 卡片 JSON schema、元素更新、流式模式等均参照 CardKit 2.0 官方指南
+- 发送消息时的 `msg_type` / content `type` 与创建卡片 API 的 `type` 含义不同，
+  MUST 区分使用场景
+
 ## 治理规则
 
 本约定文件优先级高于其他开发实践文档。
 
 所有代码变更和文档修改必须符合本约定。
 
-**版本**: 2.5.0 | **制定日期**: 2026-02-09 | **最后修订**: 2026-03-10
+**版本**: 2.6.0 | **制定日期**: 2026-02-09 | **最后修订**: 2026-03-12

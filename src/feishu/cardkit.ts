@@ -6,7 +6,6 @@ import type * as Lark from "@larksuiteoapi/node-sdk"
 import type { LogFn } from "../types.js"
 
 export interface CardKitSchema {
-  type: "card_kit"
   data: {
     schema: "2.0"
     config?: Record<string, unknown>
@@ -29,7 +28,7 @@ export class CardKitClient {
   async createCard(schema: CardKitSchema): Promise<string> {
     const res = await this.larkClient.cardkit.v1.card.create({
       data: {
-        type: "card_kit",
+        type: "card_json",
         data: JSON.stringify(schema.data),
       },
     })
