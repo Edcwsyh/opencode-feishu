@@ -29,7 +29,7 @@ export class CardKitClient {
   async createCard(schema: CardKitSchema): Promise<string> {
     const res = await this.larkClient.cardkit.v1.card.create({
       data: {
-        type: "card_kit",
+        type: "card_json",
         data: JSON.stringify(schema.data),
       },
     })
