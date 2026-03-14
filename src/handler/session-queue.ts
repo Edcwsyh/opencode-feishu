@@ -101,12 +101,17 @@ async function handleP2PMessage(
     if (apCtx) {
       await runP2PAutoPrompt(apCtx, state, controller.signal)
     }
-  })().finally(() => {
-    state.processing = false
-    state.controller = null
-    state.currentTask = null
-    cleanupStateIfIdle(sessionKey, state)
-  })
+  })()
+    .catch((err) => {
+      if (err instanceof Error && err.name === "AbortError") return
+      throw err
+    })
+    .finally(() => {
+      state.processing = false
+      state.controller = null
+      state.currentTask = null
+      cleanupStateIfIdle(sessionKey, state)
+    })
 
   state.currentTask = task
   await task
@@ -125,11 +130,11 @@ async function runP2PAutoPrompt(
   let idleCount = 0
 
   for (let i = 0; i < autoPrompt.maxIterations; i++) {
-    await abortableSleep((autoPrompt.intervalSeconds ?? 30) * 1000, signal)
-    const result = await runOneAutoPromptIteration(apCtx, i + 1)
+    await abortableSleep(autoPrompt.intervalSeconds * 1000, signal)
+    const result = await runOneAutoPromptIteration(apCtx, i + 1, signal)
     if (result.isIdle) {
       idleCount++
-      if (idleCount >= (autoPrompt.idleThreshold ?? 2)) {
+      if (idleCount >= autoPrompt.idleThreshold) {
         apCtx.deps.log("info", "P2P 自动提示循环结束（检测到空闲）", {
           sessionKey: apCtx.sessionKey, iteration: i + 1, idleCount,
         })
@@ -200,7 +205,7 @@ async function drainLoop(sessionKey: string, state: QueueState): Promise<void> {
       }
 
       // 可中断 sleep：拆成 1 秒粒度，每秒检查队列
-      const intervalSeconds = autoPrompt.intervalSeconds ?? 30
+      const intervalSeconds = autoPrompt.intervalSeconds
       let interrupted = false
       for (let s = 0; s < intervalSeconds; s++) {
         await sleep(1000)
@@ -218,7 +223,7 @@ async function drainLoop(sessionKey: string, state: QueueState): Promise<void> {
 
         if (result.isIdle) {
           idleCount++
-          if (idleCount >= (autoPrompt.idleThreshold ?? 2)) {
+          if (idleCount >= autoPrompt.idleThreshold) {
             autoPromptCtx.deps.log("info", "自动提示循环结束（检测到空闲）", {
               sessionKey, iteration: autoPromptIteration, idleCount,
             })

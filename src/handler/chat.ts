@@ -522,6 +522,7 @@ export function isIdleResponse(text: string, maxLength: number = 50): boolean {
 export async function runOneAutoPromptIteration(
   apCtx: AutoPromptContext,
   iteration: number,
+  signal?: AbortSignal,
 ): Promise<{ text: string | null; isIdle: boolean }> {
   const { sessionId, chatId, deps } = apCtx
   const { config, client, feishuClient, log, directory } = deps
@@ -538,12 +539,12 @@ export async function runOneAutoPromptIteration(
   })
 
   const text = await pollForResponse(client, sessionId, {
-    timeout, pollInterval, stablePolls, query,
+    timeout, pollInterval, stablePolls, query, signal,
   })
 
   if (!text) return { text: null, isIdle: false }
 
-  const idle = isIdleResponse(text, autoPrompt.idleMaxLength ?? 50)
+  const idle = isIdleResponse(text, autoPrompt.idleMaxLength)
   if (!idle) {
     log("info", "自动提示响应", { sessionKey: apCtx.sessionKey, iteration, output: text })
     await sender.sendTextMessage(feishuClient, chatId, text)
