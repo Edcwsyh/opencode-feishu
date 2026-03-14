@@ -104,7 +104,10 @@ async function handleP2PMessage(
   })()
     .catch((err) => {
       if (err instanceof Error && err.name === "AbortError") return
-      throw err
+      deps.log("error", "P2P 消息或自动提示处理失败", {
+        sessionKey,
+        error: err instanceof Error ? err.message : String(err),
+      })
     })
     .finally(() => {
       state.processing = false
