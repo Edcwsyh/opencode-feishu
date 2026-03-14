@@ -137,12 +137,16 @@ async function runP2PAutoPrompt(
         apCtx.deps.log("info", "P2P 自动提示循环结束（检测到空闲）", {
           sessionKey: apCtx.sessionKey, iteration: i + 1, idleCount,
         })
-        break
+        return
       }
     } else {
       idleCount = 0
     }
   }
+
+  apCtx.deps.log("info", "P2P 自动提示循环结束（达到最大次数）", {
+    sessionKey: apCtx.sessionKey,
+  })
 }
 
 /**
@@ -215,9 +219,17 @@ async function drainLoop(sessionKey: string, state: QueueState): Promise<void> {
       }
       if (interrupted) continue
 
-      // 执行一轮 auto-prompt
+      // 执行一轮 auto-prompt（可被新入队消息打断）
+      const autoPromptController = new AbortController()
+      const monitor = setInterval(() => {
+        if (state.queue.length > 0) autoPromptController.abort()
+      }, 200)
       try {
-        const result = await runOneAutoPromptIteration(autoPromptCtx, autoPromptIteration + 1)
+        const result = await runOneAutoPromptIteration(
+          autoPromptCtx,
+          autoPromptIteration + 1,
+          autoPromptController.signal,
+        )
         autoPromptIteration++
 
         if (result.isIdle) {
@@ -232,11 +244,16 @@ async function drainLoop(sessionKey: string, state: QueueState): Promise<void> {
           idleCount = 0
         }
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          continue
+        }
         autoPromptCtx.deps.log("error", "自动提示迭代异常", {
           sessionKey,
           error: err instanceof Error ? err.message : String(err),
         })
         break
+      } finally {
+        clearInterval(monitor)
       }
     }
   } finally {
