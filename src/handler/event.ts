@@ -238,11 +238,12 @@ function handleSessionErrorEvent(event: Event, deps: EventDeps): void {
     errMsg = error
   } else if (error && typeof error === "object") {
     const e = error as Record<string, unknown>
+    const asStr = (v: unknown): string | undefined =>
+      typeof v === "string" && v.trim().length > 0 ? v : undefined
     const rawDataMsg = (e.data && typeof e.data === "object" && "message" in e.data)
       ? (e.data as { message?: unknown }).message
       : undefined
-    const dataMsg = rawDataMsg != null ? String(rawDataMsg) : undefined
-    errMsg = String(e.message ?? dataMsg ?? e.type ?? e.name ?? "An unexpected error occurred")
+    errMsg = asStr(e.message) ?? asStr(rawDataMsg) ?? asStr(e.type) ?? asStr(e.name) ?? "An unexpected error occurred"
   } else {
     errMsg = String(error)
   }
