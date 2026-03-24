@@ -37,6 +37,8 @@ export interface FeishuPluginConfig {
   stablePolls?: number
   /** 消息去重缓存过期毫秒数（默认 600000 即 10 分钟） */
   dedupTtl?: number
+  /** 单个资源最大下载大小（字节，默认 500MB） */
+  maxResourceSize?: number
   /** 默认工作目录（覆盖 OpenCode 插件上下文的 directory） */
   directory?: string
   /** 自动提示配置：响应完成后自动发送"继续"推动 OpenCode 持续工作 */
@@ -69,6 +71,7 @@ export const FeishuConfigSchema = z.object({
   pollInterval: z.number().int().positive().default(1_000),
   stablePolls: z.number().int().positive().default(3),
   dedupTtl: z.number().int().positive().default(10 * 60 * 1_000),
+  maxResourceSize: z.number().int().positive().max(500 * 1024 * 1024).default(500 * 1024 * 1024),
   directory: z.string().optional(),
   autoPrompt: AutoPromptSchema.default(() => AutoPromptSchema.parse({})),
 })
