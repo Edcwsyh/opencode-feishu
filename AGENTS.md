@@ -101,7 +101,7 @@ npm run build
 
 **3. 创建飞书配置文件** `~/.config/opencode/plugins/feishu.json`：
 ```json
-{ "appId": "cli_xxxxxxxxxxxx", "appSecret": "your_secret" }
+{ "appId": "cli_xxxxxxxxxxxx", "appSecret": "your_secret", "maxResourceSize": 524288000 }
 ```
 
 ## 架构设计
@@ -248,9 +248,9 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 
 ### 配置文件
 
-**1. OpenCode 插件声明**（`~/.config/opencode/opencode.json`）：
+**1. OpenCode 插件声明**（`~/.config/opencode/opencode.json`，使用项目绝对路径）：
 ```json
-{ "plugin": ["opencode-feishu"] }
+{ "plugin": ["D:/path/to/opencode-feishu"] }
 ```
 
 **2. 飞书配置**（`~/.config/opencode/plugins/feishu.json`）：
@@ -264,7 +264,7 @@ OpenCode 加载插件 → src/index.ts (FeishuPlugin)
 ```
 
 必需字段：`appId`, `appSecret`
-可选字段：`timeout`（默认 120000ms）、`thinkingDelay`（默认 2500ms）、`logLevel`（默认 `"info"`，控制 Lark SDK 日志级别）
+可选字段：`timeout`（默认 120000ms）、`thinkingDelay`（默认 2500ms）、`logLevel`（默认 `"info"`，控制 Lark SDK 日志级别）、`maxResourceSize`（默认 500MB，最大 500MB）
 自动提示：`autoPrompt` 对象 — `enabled`（默认 false）、`intervalSeconds`（默认 30）、`maxIterations`（默认 10）、`message`（默认 "请同步当前进度，如需帮助请说明"）、`idleThreshold`（连续空闲次数阈值，默认 2）、`idleMaxLength`（空闲判定文本长度上限，默认 50）
 
 ## 群聊行为

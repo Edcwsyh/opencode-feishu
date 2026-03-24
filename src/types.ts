@@ -37,7 +37,7 @@ export interface FeishuPluginConfig {
   stablePolls?: number
   /** 消息去重缓存过期毫秒数（默认 600000 即 10 分钟） */
   dedupTtl?: number
-  /** 单个资源最大下载大小（字节，默认 10MB） */
+  /** 单个资源最大下载大小（字节，默认 500MB） */
   maxResourceSize?: number
   /** 默认工作目录（覆盖 OpenCode 插件上下文的 directory） */
   directory?: string
