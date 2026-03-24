@@ -3,7 +3,7 @@
  */
 import type * as Lark from "@larksuiteoapi/node-sdk"
 import type { LogFn } from "../types.js"
-import { downloadMessageResource, guessMimeByFilename } from "./resource.js"
+import { downloadMessageResource, guessMimeByFilename, type DownloadResult } from "./resource.js"
 
 /** OpenCode SDK 兼容的 part 输入类型 */
 export type PromptPart =
@@ -26,19 +26,20 @@ export async function extractParts(
   messageType: string,
   rawContent: string,
   log: LogFn,
+  maxResourceSize: number,
 ): Promise<PromptPart[]> {
   try {
     switch (messageType) {
       case "text":
         return extractText(rawContent)
       case "image":
-        return await extractImage(feishuClient, messageId, rawContent, log)
+        return await extractImage(feishuClient, messageId, rawContent, log, maxResourceSize)
       case "post":
         return extractPost(rawContent)
       case "file":
-        return await extractFile(feishuClient, messageId, rawContent, log)
+        return await extractFile(feishuClient, messageId, rawContent, log, maxResourceSize)
       case "audio":
-        return await extractAudio(feishuClient, messageId, rawContent, log)
+        return await extractAudio(feishuClient, messageId, rawContent, log, maxResourceSize)
       case "media":
         return extractMediaFallback()
       case "sticker":
@@ -122,15 +123,18 @@ async function extractImage(
   messageId: string,
   rawContent: string,
   log: LogFn,
+  maxResourceSize: number,
 ): Promise<PromptPart[]> {
   const parsed = JSON.parse(rawContent) as { image_key?: string }
   const imageKey = parsed.image_key
   if (!imageKey) return [{ type: "text", text: "[图片: 无法获取]" }]
 
-  const resource = await downloadMessageResource(client, messageId, imageKey, "image", log)
-  if (!resource) return [{ type: "text", text: "[图片: 下载失败]" }]
+  const result = await downloadMessageResource(client, messageId, imageKey, "image", log, maxResourceSize)
+  if (!result.resource) {
+    return [{ type: "text", text: formatDownloadFailure("图片", result, maxResourceSize) }]
+  }
 
-  return [{ type: "file", mime: resource.mime, url: resource.dataUrl }]
+  return [{ type: "file", mime: result.resource.mime, url: result.resource.dataUrl }]
 }
 
 function extractPost(rawContent: string): PromptPart[] {
@@ -177,6 +181,7 @@ async function extractFile(
   messageId: string,
   rawContent: string,
   log: LogFn,
+  maxResourceSize: number,
 ): Promise<PromptPart[]> {
   const parsed = JSON.parse(rawContent) as { file_key?: string; file_name?: string }
   const fileKey = parsed.file_key
@@ -185,10 +190,12 @@ async function extractFile(
   if (!fileKey) return [{ type: "text", text: `[文件: ${fileName}]` }]
 
   const mime = guessMimeByFilename(fileName)
-  const resource = await downloadMessageResource(client, messageId, fileKey, "file", log)
-  if (!resource) return [{ type: "text", text: `[文件下载失败: ${fileName}]` }]
+  const result = await downloadMessageResource(client, messageId, fileKey, "file", log, maxResourceSize)
+  if (!result.resource) {
+    return [{ type: "text", text: formatDownloadFailure(fileName, result, maxResourceSize) }]
+  }
 
-  return [{ type: "file", mime: resource.mime || mime, url: resource.dataUrl, filename: fileName }]
+  return [{ type: "file", mime: result.resource.mime || mime, url: result.resource.dataUrl, filename: fileName }]
 }
 
 async function extractAudio(
@@ -196,21 +203,33 @@ async function extractAudio(
   messageId: string,
   rawContent: string,
   log: LogFn,
+  maxResourceSize: number,
 ): Promise<PromptPart[]> {
   const parsed = JSON.parse(rawContent) as { file_key?: string }
   const fileKey = parsed.file_key
 
   if (!fileKey) return [{ type: "text", text: "[语音: 无法获取]" }]
 
-  const resource = await downloadMessageResource(client, messageId, fileKey, "file", log)
-  if (!resource) return [{ type: "text", text: "[语音: 下载失败]" }]
+  const result = await downloadMessageResource(client, messageId, fileKey, "file", log, maxResourceSize)
+  if (!result.resource) {
+    return [{ type: "text", text: formatDownloadFailure("语音", result, maxResourceSize) }]
+  }
 
-  return [{ type: "file", mime: resource.mime || "audio/opus", url: resource.dataUrl }]
+  return [{ type: "file", mime: result.resource.mime || "audio/opus", url: result.resource.dataUrl }]
 }
 
 function extractMediaFallback(): PromptPart[] {
   // 视频通常较大，默认不下载，仅文本描述
   return [{ type: "text", text: "[视频消息]" }]
+}
+
+function formatDownloadFailure(label: string, result: DownloadResult, maxSize: number): string {
+  if (result.reason === "too_large" && result.totalSize) {
+    const sizeMB = (result.totalSize / (1024 * 1024)).toFixed(1)
+    const limitMB = (maxSize / (1024 * 1024)).toFixed(0)
+    return `[文件过大: ${label}, 已下载 ${sizeMB}MB 时超出 ${limitMB}MB 限制]`
+  }
+  return `[下载失败: ${label}]`
 }
 
 function extractInteractive(rawContent: string): PromptPart[] {

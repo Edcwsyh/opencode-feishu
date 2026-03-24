@@ -11,13 +11,16 @@ export interface DownloadedResource {
   filename?: string
 }
 
-const MAX_RESOURCE_SIZE = 10 * 1024 * 1024 // 10MB
+export interface DownloadResult {
+  resource: DownloadedResource | null
+  reason: "ok" | "too_large" | "error"
+  totalSize?: number
+}
 
 /**
  * 下载飞书消息中的资源文件，返回 data URL
  *
  * 使用 im.messageResource.get API，支持图片、文件、音频、视频
- * 返回 null 表示下载失败或资源过大
  */
 export async function downloadMessageResource(
   client: InstanceType<typeof Lark.Client>,
@@ -25,7 +28,8 @@ export async function downloadMessageResource(
   fileKey: string,
   type: "image" | "file",
   log: LogFn,
-): Promise<DownloadedResource | null> {
+  maxSize: number,
+): Promise<DownloadResult> {
   try {
     const res = await client.im.messageResource.get({
       path: { message_id: messageId, file_key: fileKey },
@@ -34,7 +38,7 @@ export async function downloadMessageResource(
 
     if (!res) {
       log("warn", "资源下载返回空数据", { messageId, fileKey, type })
-      return null
+      return { resource: null, reason: "error" }
     }
 
     const stream = res.getReadableStream()
@@ -44,10 +48,10 @@ export async function downloadMessageResource(
     for await (const chunk of stream) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as unknown as Uint8Array)
       totalSize += buf.length
-      if (totalSize > MAX_RESOURCE_SIZE) {
-        log("warn", "资源过大，跳过下载", { messageId, fileKey, totalSize })
+      if (totalSize > maxSize) {
+        log("warn", "资源过大，跳过下载", { messageId, fileKey, totalSize, maxSize })
         stream.destroy()
-        return null
+        return { resource: null, reason: "too_large", totalSize }
       }
       chunks.push(buf)
     }
@@ -58,7 +62,7 @@ export async function downloadMessageResource(
     const base64 = buffer.toString("base64")
     const dataUrl = `data:${contentType};base64,${base64}`
 
-    return { dataUrl, mime: contentType }
+    return { resource: { dataUrl, mime: contentType }, reason: "ok" }
   } catch (err) {
     log("warn", "资源下载失败", {
       messageId,
@@ -66,7 +70,7 @@ export async function downloadMessageResource(
       type,
       error: err instanceof Error ? err.message : String(err),
     })
-    return null
+    return { resource: null, reason: "error" }
   }
 }
 

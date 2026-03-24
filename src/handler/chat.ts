@@ -76,7 +76,7 @@ export async function handleChat(ctx: FeishuMessageContext, deps: ChatDeps, sign
   registerSessionChat(session.id, chatId, chatType)
 
   // 提取消息内容为 OpenCode parts
-  const parts = await buildPromptParts(feishuClient, messageId, messageType, rawContent, content, chatType, senderId, log)
+  const parts = await buildPromptParts(feishuClient, messageId, messageType, rawContent, content, chatType, senderId, log, config.maxResourceSize)
   if (!parts.length) return undefined
 
   log("info", "收到用户消息", {
@@ -285,6 +285,7 @@ async function buildPromptParts(
   chatType: "p2p" | "group",
   senderId: string,
   log: LogFn,
+  maxResourceSize: number,
 ): Promise<PromptPart[]> {
   if (messageType === "text") {
     // 文本消息：沿用原有逻辑，群聊添加发送者前缀
@@ -296,7 +297,7 @@ async function buildPromptParts(
   }
 
   // 非文本消息：通过 content-extractor 提取
-  const parts = await extractParts(feishuClient, messageId, messageType, rawContent, log)
+  const parts = await extractParts(feishuClient, messageId, messageType, rawContent, log, maxResourceSize)
 
   // 群聊非文本消息：在 parts 前添加发送者前缀
   if (chatType === "group" && senderId && parts.length > 0) {
