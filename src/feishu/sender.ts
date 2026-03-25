@@ -17,11 +17,11 @@ async function wrapSendCall(
     const res = await fn()
     return { ok: true, messageId: idExtractor(res) }
   } catch (err) {
-    const larkErr = err as { code?: number; msg?: string; logId?: string }
+    const larkErr = (err != null && typeof err === "object") ? err as Record<string, unknown> : {}
     const parts = [
       larkErr.code !== undefined ? `code=${larkErr.code}` : null,
-      larkErr.msg ? `msg=${larkErr.msg}` : null,
-      larkErr.logId ? `logId=${larkErr.logId}` : null,
+      typeof larkErr.msg === "string" ? `msg=${larkErr.msg}` : null,
+      typeof larkErr.logId === "string" ? `logId=${larkErr.logId}` : null,
     ].filter(Boolean).join(", ")
     const message = err instanceof Error ? err.message : String(err)
     return { ok: false, error: parts ? `${message} (${parts})` : message }

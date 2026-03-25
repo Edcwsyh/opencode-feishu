@@ -50,6 +50,8 @@ async function finalizeReply(
   }
 }
 
+const ABORT_LABEL = "⏹ 已中断"
+
 /** 中断清理：更新流式卡片或占位消息为已中断状态 */
 async function abortCleanup(
   streamingCard: StreamingCard | undefined,
@@ -59,7 +61,7 @@ async function abortCleanup(
   if (streamingCard) {
     await streamingCard.abort().catch(() => {})
   } else if (placeholderId) {
-    await sender.updateMessage(feishuClient, placeholderId, "⏹ 已中断").catch(() => {})
+    await sender.updateMessage(feishuClient, placeholderId, ABORT_LABEL).catch(() => {})
   }
 }
 
