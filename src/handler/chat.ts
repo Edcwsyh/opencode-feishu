@@ -50,16 +50,18 @@ async function finalizeReply(
   }
 }
 
-/** 中断清理：删除流式卡片或占位消息 */
+const ABORT_LABEL = "⏹ 已中断"
+
+/** 中断清理：更新流式卡片或占位消息为已中断状态 */
 async function abortCleanup(
   streamingCard: StreamingCard | undefined,
   feishuClient: InstanceType<typeof Lark.Client>,
   placeholderId: string,
 ): Promise<void> {
   if (streamingCard) {
-    await streamingCard.destroy()
+    await streamingCard.abort().catch(() => {})
   } else if (placeholderId) {
-    await sender.deleteMessage(feishuClient, placeholderId).catch(() => {})
+    await sender.updateMessage(feishuClient, placeholderId, ABORT_LABEL).catch(() => {})
   }
 }
 
