@@ -4,7 +4,7 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { getChatIdBySession, getChatInfoBySession } from "../feishu/session-chat-map.js"
 import { sendInteractiveCard } from "../feishu/sender.js"
-import { truncateMarkdown } from "../feishu/markdown.js"
+
 import type * as Lark from "@larksuiteoapi/node-sdk"
 import type { LogFn } from "../types.js"
 
@@ -68,7 +68,7 @@ export function createSendCardTool(deps: SendCardDeps): ToolDefinition {
       }
 
       const chatInfo = getChatInfoBySession(context.sessionID)
-      const card = buildCardFromDSL(args, chatId, chatInfo?.chatType ?? "p2p")
+      const card = { type: "card_kit" as const, data: buildCardFromDSL(args, chatId, chatInfo?.chatType ?? "p2p") }
       const result = await sendInteractiveCard(deps.feishuClient, chatId, card)
 
       if (result.ok) {
@@ -148,7 +148,7 @@ export function buildCardFromDSL(
           default:
             return {
               tag: "markdown",
-              content: truncateMarkdown(s.content ?? "", 28_000),
+              content: s.content ?? "",
             }
         }
       }).filter(Boolean),
