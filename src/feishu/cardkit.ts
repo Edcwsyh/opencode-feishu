@@ -74,7 +74,7 @@ export class CardKitClient {
     try {
       const res = await this.larkClient.cardkit.v1.cardElement.content({
         data: {
-          content: JSON.stringify({ tag: "markdown", content }),
+          content,
           sequence,
         },
         path: {
