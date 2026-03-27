@@ -356,7 +356,7 @@ async function buildPromptParts(
   maxResourceSize: number,
   parentId?: string,
 ): Promise<PromptPart[]> {
-  // 引用消息前缀：如果是回复消息，获取被引用内容
+  // 引用消息前缀
   let quotePrefix = ""
   if (parentId) {
     const quoted = await fetchQuotedMessage(feishuClient, parentId, log)
@@ -365,11 +365,14 @@ async function buildPromptParts(
     }
   }
 
+  // 群聊：解析用户名（一次解析，两个路径复用）
+  const senderName = (chatType === "group" && senderId)
+    ? await resolveUserName(feishuClient, senderId, log)
+    : ""
+
   if (messageType === "text") {
-    // 文本消息：沿用原有逻辑，群聊添加发送者前缀
     let promptText = textContent
-    if (chatType === "group" && senderId) {
-      const senderName = await resolveUserName(feishuClient, senderId, log)
+    if (senderName) {
       promptText = `[${senderName}]: ${textContent}`
     }
     return [{ type: "text", text: quotePrefix + promptText }]
@@ -378,17 +381,10 @@ async function buildPromptParts(
   // 非文本消息：通过 content-extractor 提取
   const parts = await extractParts(feishuClient, messageId, messageType, rawContent, log, maxResourceSize)
 
-  // 群聊非文本消息：在 parts 前添加发送者前缀
-  if (chatType === "group" && senderId && parts.length > 0) {
-    const senderName = await resolveUserName(feishuClient, senderId, log)
-    const prefixParts: PromptPart[] = quotePrefix
-      ? [{ type: "text", text: quotePrefix + `[${senderName}]:` }]
-      : [{ type: "text", text: `[${senderName}]:` }]
-    return [...prefixParts, ...parts]
-  }
-
-  if (quotePrefix && parts.length > 0) {
-    return [{ type: "text", text: quotePrefix }, ...parts]
+  // 组装前缀
+  const prefix = [quotePrefix, senderName ? `[${senderName}]:` : ""].filter(Boolean).join("")
+  if (prefix && parts.length > 0) {
+    return [{ type: "text", text: prefix }, ...parts]
   }
 
   return parts
