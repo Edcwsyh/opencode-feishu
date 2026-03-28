@@ -49,7 +49,7 @@ export async function ingestGroupHistory(
   const contextText = formatHistoryAsContext(messages)
 
   // 4. 发送到 OpenCode（noReply: true，仅记录上下文，不触发 AI 回复）
-  await opencodeClient.session.prompt({
+  await opencodeClient.session.promptAsync({
     path: { id: session.id },
     query,
     body: {

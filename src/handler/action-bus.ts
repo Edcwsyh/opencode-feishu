@@ -64,9 +64,3 @@ export function emit(sessionId: string, action: ProcessedAction): void {
   }
 }
 
-/**
- * 清理指定 session 的所有订阅
- */
-export function unsubscribeAll(sessionId: string): void {
-  subscribers.delete(sessionId)
-}

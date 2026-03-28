@@ -87,6 +87,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
   const botOpenId = await fetchBotOpenId(larkClient, log)
 
   const v2Client = createOpencodeClient({ directory: resolvedConfig.directory || undefined })
+  const interactiveDeps: InteractiveDeps = { feishuClient: larkClient, log, v2Client }
 
   // 启动飞书 WebSocket 网关（复用 larkClient）
   gateway = startFeishuGateway({
@@ -95,11 +96,6 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     botOpenId,
     onMessage: async (msgCtx) => {
       if (!msgCtx.content.trim() || !gateway) return
-      const interactiveDeps: InteractiveDeps = {
-        feishuClient: larkClient,
-        log,
-        v2Client,
-      }
       await enqueueMessage(msgCtx, {
         config: resolvedConfig,
         client,
@@ -125,11 +121,6 @@ export const FeishuPlugin: Plugin = async (ctx) => {
     },
     onCardAction: async (action) => {
       if (!gateway) return
-      const interactiveDeps: InteractiveDeps = {
-        feishuClient: larkClient,
-        log,
-        v2Client,
-      }
       await handleCardAction(action, interactiveDeps)
     },
     log,
@@ -143,7 +134,7 @@ export const FeishuPlugin: Plugin = async (ctx) => {
   const hooks: Hooks = {
     event: async ({ event }) => {
       if (!gateway) return
-      await handleEvent(event, { log, directory: resolvedConfig.directory, client, nudgeOnIdle: resolvedConfig.nudgeOnIdle })
+      await handleEvent(event, { log, directory: resolvedConfig.directory, client, nudge: resolvedConfig.nudge })
     },
     tool: {
       feishu_send_card: createSendCardTool({ feishuClient: larkClient, log }),
