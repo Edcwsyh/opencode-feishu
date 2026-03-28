@@ -32,9 +32,24 @@ export function createSendCardTool(deps: SendCardDeps): ToolDefinition {
         .array(
           z.object({
             type: z
-              .enum(["markdown", "divider", "note", "actions"])
+              .enum([
+                "markdown", "divider", "note", "actions",
+                "image", "person", "person_list", "image_list",
+                "chart", "table",
+                "input", "select", "multi_select", "date_picker", "time_picker", "datetime_picker",
+                "checker", "overflow", "person_picker", "multi_person_picker",
+                "collapse", "image_picker",
+              ])
               .default("markdown")
-              .describe("区块类型：markdown（正文）、divider（分割线）、note（备注）、actions（按钮组）"),
+              .describe(
+                "区块类型：markdown（正文）、divider（分割线）、note（备注）、actions（按钮组）、" +
+                "image（图片）、person（人员）、person_list（人员列表）、image_list（多图组合）、" +
+                "chart（图表）、table（表格）、" +
+                "input（输入框）、select（单选）、multi_select（多选）、date_picker（日期）、" +
+                "time_picker（时间）、datetime_picker（日期时间）、checker（复选框）、" +
+                "overflow（更多菜单）、person_picker（人员选择）、multi_person_picker（多人选择）、" +
+                "collapse（折叠面板）、image_picker（图片选择）"
+              ),
             content: z
               .string()
               .optional()
@@ -52,6 +67,36 @@ export function createSendCardTool(deps: SendCardDeps): ToolDefinition {
               )
               .optional()
               .describe("按钮列表（仅 actions 类型使用）"),
+            imageKey: z.string().optional().describe("图片 key（image/image_list 类型）"),
+            alt: z.string().optional().describe("图片描述文字"),
+            userId: z.string().optional().describe("用户 open_id（person 类型）"),
+            userIds: z.array(z.string()).optional().describe("用户 open_id 列表（person_list 类型）"),
+            imageKeys: z.array(z.string()).optional().describe("图片 key 列表（image_list 类型）"),
+            layout: z.string().optional().describe("多图布局：bisect/trisect/quadrisect"),
+            chartSpec: z.record(z.string(), z.unknown()).optional().describe("图表规格（ECharts 格式）"),
+            columns: z
+              .array(z.object({ name: z.string(), dataType: z.string().optional() }))
+              .optional()
+              .describe("表格列定义"),
+            rows: z
+              .array(z.record(z.string(), z.unknown()))
+              .optional()
+              .describe("表格行数据"),
+            name: z.string().optional().describe("交互组件名称（用于回调标识）"),
+            placeholder: z.string().optional().describe("输入框/选择器占位文本"),
+            defaultValue: z.string().optional().describe("输入框默认值"),
+            options: z
+              .array(
+                z.object({
+                  label: z.string(),
+                  value: z.string(),
+                  imageKey: z.string().optional(),
+                }),
+              )
+              .optional()
+              .describe("选择器选项列表"),
+            checked: z.boolean().optional().describe("复选框初始状态"),
+            title: z.string().optional().describe("折叠面板标题"),
           }),
         )
         .min(1)
@@ -101,9 +146,33 @@ export type ButtonInput = {
 }
 
 export type SectionInput = {
-  type: "markdown" | "divider" | "note" | "actions"
+  type:
+    | "markdown" | "divider" | "note" | "actions"
+    | "image" | "person" | "person_list" | "image_list"
+    | "chart" | "table"
+    | "input" | "select" | "multi_select" | "date_picker" | "time_picker" | "datetime_picker"
+    | "checker" | "overflow" | "person_picker" | "multi_person_picker"
+    | "collapse" | "image_picker"
   content?: string
   buttons?: readonly ButtonInput[]
+  // Display
+  imageKey?: string
+  alt?: string
+  userId?: string
+  userIds?: string[]
+  imageKeys?: string[]
+  layout?: string
+  chartSpec?: object
+  columns?: { name: string; dataType?: string }[]
+  rows?: Record<string, unknown>[]
+  // Interactive
+  name?: string
+  placeholder?: string
+  defaultValue?: string
+  options?: readonly { label: string; value: string; imageKey?: string }[]
+  checked?: boolean
+  // Container
+  title?: string
 }
 
 export function buildCardFromDSL(
@@ -119,37 +188,141 @@ export function buildCardFromDSL(
       template: args.template,
     },
     body: {
-      elements: args.sections.map((s) => {
+      elements: args.sections.flatMap((s) => {
         switch (s.type) {
           case "divider":
             return { tag: "hr" }
           case "note":
-            return {
-              tag: "note",
-              elements: [{ tag: "plain_text", content: s.content ?? "" }],
-            }
+            // Card 2.0 无 note 组件，用 div + plain_text 替代
+            return { tag: "div", text: { tag: "plain_text", content: s.content ?? "" } }
           case "actions":
-            if (!s.buttons?.length) return null
+            if (!s.buttons?.length) return []
+            // Card 2.0 无 action 容器，用 column_set 横排按钮
             return {
-              tag: "action",
-              actions: s.buttons.map((btn) => ({
-                tag: "button",
-                text: { tag: "plain_text", content: btn.text },
-                type: btn.style,
-                value: JSON.stringify(btn.actionPayload ?? {
-                  action: "send_message",
-                  chatId,
-                  chatType,
-                  text: btn.value,
-                }),
+              tag: "column_set",
+              flex_mode: "none",
+              background_style: "default",
+              columns: s.buttons.map((btn) => ({
+                tag: "column",
+                width: "weighted",
+                weight: 1,
+                elements: [{
+                  tag: "button",
+                  text: { tag: "plain_text", content: btn.text },
+                  type: btn.style,
+                  value: btn.actionPayload ?? {
+                    action: "send_message",
+                    chatId,
+                    chatType,
+                    text: btn.value,
+                  },
+                }],
               })),
+            }
+          case "image":
+            return { tag: "img", img_key: s.imageKey ?? "", alt: { tag: "plain_text", content: s.alt ?? "" } }
+          case "person":
+            return { tag: "person", user_id: s.userId ?? "" }
+          case "person_list":
+            return { tag: "person_list", persons: (s.userIds ?? []).map(id => ({ id })), size: "small" }
+          case "image_list":
+            return {
+              tag: "img_combination",
+              combination_mode: s.layout ?? "bisect",
+              img_list: (s.imageKeys ?? []).map(k => ({ img_key: k })),
+            }
+          case "chart":
+            return { tag: "chart", chart_spec: s.chartSpec ?? {} }
+          case "table": {
+            if (!s.columns?.length) return []
+            return {
+              tag: "table",
+              page_size: 10,
+              columns: s.columns.map(c => ({ name: c.name, data_type: c.dataType ?? "text" })),
+              rows: s.rows ?? [],
+            }
+          }
+          case "input":
+            return {
+              tag: "input",
+              name: s.name ?? "input",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+              ...(s.defaultValue ? { default_value: s.defaultValue } : {}),
+            }
+          case "select":
+            return {
+              tag: "select_static",
+              name: s.name ?? "select",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+              options: (s.options ?? []).map(o => ({ text: { tag: "plain_text", content: o.label }, value: o.value })),
+            }
+          case "multi_select":
+            return {
+              tag: "multi_select_static",
+              name: s.name ?? "multi_select",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+              options: (s.options ?? []).map(o => ({ text: { tag: "plain_text", content: o.label }, value: o.value })),
+            }
+          case "date_picker":
+            return {
+              tag: "date_picker",
+              name: s.name ?? "date",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+            }
+          case "time_picker":
+            return {
+              tag: "picker_time",
+              name: s.name ?? "time",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+            }
+          case "datetime_picker":
+            return {
+              tag: "picker_datetime",
+              name: s.name ?? "datetime",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+            }
+          case "checker":
+            return {
+              tag: "checker",
+              name: s.name ?? "checker",
+              checked: s.checked ?? false,
+              text: { tag: "plain_text", content: s.content ?? "" },
+            }
+          case "overflow":
+            return {
+              tag: "overflow",
+              options: (s.options ?? []).map(o => ({ text: { tag: "plain_text", content: o.label }, value: o.value })),
+            }
+          case "person_picker":
+            return {
+              tag: "select_person",
+              name: s.name ?? "person",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+            }
+          case "multi_person_picker":
+            return {
+              tag: "multi_select_person",
+              name: s.name ?? "persons",
+              ...(s.placeholder ? { placeholder: { tag: "plain_text", content: s.placeholder } } : {}),
+            }
+          case "collapse":
+            return {
+              tag: "collapsible_panel",
+              expanded: false,
+              header: { title: { tag: "plain_text", content: s.title ?? "" } },
+              elements: [{ tag: "markdown", content: s.content ?? "" }],
+            }
+          case "image_picker":
+            return {
+              tag: "select_img",
+              name: s.name ?? "img",
+              options: (s.options ?? [])
+                .filter(o => o.imageKey)
+                .map(o => ({ img_key: o.imageKey!, value: o.value })),
             }
           case "markdown":
           default:
-            return {
-              tag: "markdown",
-              content: s.content ?? "",
-            }
+            return { tag: "markdown", content: s.content ?? "" }
         }
       }).filter(Boolean),
     },
