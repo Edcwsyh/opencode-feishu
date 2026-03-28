@@ -291,7 +291,7 @@ function handleV2Event(event: Event, deps: EventDeps): void {
   }
 }
 
-/** 催促计数器：sessionId → { count, lastNudgeTime }（用户新消息时清理） */
+/** 催促计数器：sessionId → { count, lastTime }（用户新消息时清理） */
 const nudgeState = new Map<string, { count: number; lastTime: number }>()
 
 export function clearNudge(sessionId: string): void {
