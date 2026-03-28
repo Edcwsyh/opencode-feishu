@@ -149,7 +149,9 @@ export const FeishuPlugin: Plugin = async (ctx) => {
       try {
         const cfg = await client.config.get({ query: { directory: resolvedConfig.directory || undefined } })
         if (cfg?.data?.model) runtimeLines.push(`当前模型: ${cfg.data.model}`)
-      } catch {}
+      } catch (err) {
+        log("warn", "获取 config 失败", { error: err instanceof Error ? err.message : String(err) })
+      }
       output.system.push(runtimeLines.join("\n"))
     },
   }
