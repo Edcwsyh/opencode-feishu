@@ -9,9 +9,9 @@ export interface FeishuSendResult {
   error?: string;
 }
 
-async function wrapSendCall(
-  fn: () => Promise<any>,
-  idExtractor: (res: any) => string = (res) => res?.data?.message_id ?? "",
+async function wrapSendCall<T>(
+  fn: () => Promise<T>,
+  idExtractor: (res: T) => string = (res) => (res as { data?: { message_id?: string } })?.data?.message_id ?? "",
 ): Promise<FeishuSendResult> {
   try {
     const res = await fn()

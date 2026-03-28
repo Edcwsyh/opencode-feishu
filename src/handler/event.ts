@@ -22,7 +22,7 @@ export interface EventDeps {
   log: LogFn
   directory: string
   client: import("@opencode-ai/sdk").OpencodeClient
-  nudgeOnIdle: boolean
+  nudge: { enabled: boolean; message: string; intervalSeconds: number; maxIterations: number }
 }
 
 const pendingBySession = new Map<string, PendingReplyPayload>()
@@ -291,20 +291,23 @@ function handleV2Event(event: Event, deps: EventDeps): void {
   }
 }
 
-/** 已催促的 session 集合（防止重复催促，用户新消息时由 handleChat 清理） */
-const nudgedSessions = new Set<string>()
+/** 催促计数器：sessionId → { count, lastTime }（用户新消息时清理） */
+const nudgeState = new Map<string, { count: number; lastTime: number }>()
 
 export function clearNudge(sessionId: string): void {
-  nudgedSessions.delete(sessionId)
+  nudgeState.delete(sessionId)
 }
 
 /**
- * session.idle 时检查最后一条 AI 消息：如果以工具调用结尾，发一次 "继续"。
- * 仅催促一次（直到下一条用户消息重置）。
+ * session.idle 时检查最后一条 AI 消息：如果以工具调用结尾，按配置催促。
+ * 受 maxIterations 和 intervalSeconds 限制，用户新消息后重置。
  */
 async function nudgeIfToolIdle(sessionId: string, deps: EventDeps): Promise<void> {
-  if (!deps.nudgeOnIdle) return
-  if (nudgedSessions.has(sessionId)) return
+  if (!deps.nudge.enabled) return
+
+  const state = nudgeState.get(sessionId) ?? { count: 0, lastTime: 0 }
+  if (state.count >= deps.nudge.maxIterations) return
+  if (Date.now() - state.lastTime < deps.nudge.intervalSeconds * 1000) return
 
   const { client, log, directory } = deps
   const query = directory ? { directory } : undefined
@@ -322,14 +325,16 @@ async function nudgeIfToolIdle(sessionId: string, deps: EventDeps): Promise<void
     const lastPart = lastAssistant.parts[lastAssistant.parts.length - 1]
     if (lastPart.type !== "tool") return
 
-    // AI 以工具调用结尾后 idle — 可能需要催促
-    nudgedSessions.add(sessionId)
-    log("info", "session.idle 检测到工具调用后停止，发送催促", { sessionId })
+    // AI 以工具调用结尾后 idle — 催促继续
+    nudgeState.set(sessionId, { count: state.count + 1, lastTime: Date.now() })
+    log("info", "session.idle 检测到工具调用后停止，发送催促", {
+      sessionId, iteration: state.count + 1, maxIterations: deps.nudge.maxIterations,
+    })
 
     await client.session.promptAsync({
       path: { id: sessionId },
       query,
-      body: { parts: [{ type: "text", text: "继续" }] },
+      body: { parts: [{ type: "text", text: deps.nudge.message }] },
     })
   } catch (err) {
     log("warn", "session.idle 催促失败", {

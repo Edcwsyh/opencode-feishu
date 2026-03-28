@@ -21,30 +21,12 @@ export interface FeishuMessageContext {
   shouldReply: boolean
 }
 
-/**
- * 插件配置（从 ~/.config/opencode/plugins/feishu.json 读取）
- */
-export interface FeishuPluginConfig {
-  appId: string
-  appSecret: string
-  timeout?: number
-  thinkingDelay?: number
-  logLevel?: "fatal" | "error" | "warn" | "info" | "debug" | "trace"
-  /** 入群时拉取历史消息的最大条数（默认 50） */
-  maxHistoryMessages?: number
-  /** 轮询 AI 响应的间隔毫秒数（默认 1500） */
-  pollInterval?: number
-  /** 连续几次轮询内容不变视为回复完成（默认 2） */
-  stablePolls?: number
-  /** 消息去重缓存过期毫秒数（默认 600000 即 10 分钟） */
-  dedupTtl?: number
-  /** 单个资源最大下载大小（字节，默认 500MB） */
-  maxResourceSize?: number
-  /** session.idle 后检测工具调用停止时自动催促一次（默认 false） */
-  nudgeOnIdle?: boolean
-  /** 默认工作目录（覆盖 OpenCode 插件上下文的 directory） */
-  directory?: string
-}
+const NudgeSchema = z.object({
+  enabled: z.boolean().default(false),
+  message: z.string().min(1).default("上一步操作已完成。请继续执行下一步，同步当前进度。如果全部完成，给出完整结果和结论。"),
+  intervalSeconds: z.number().int().positive().max(300).default(30),
+  maxIterations: z.number().int().positive().max(100).default(3),
+})
 
 export const FeishuConfigSchema = z.object({
   appId: z.string().min(1, "appId 不能为空"),
@@ -57,9 +39,15 @@ export const FeishuConfigSchema = z.object({
   stablePolls: z.number().int().positive().default(3),
   dedupTtl: z.number().int().positive().default(10 * 60 * 1_000),
   maxResourceSize: z.number().int().positive().max(500 * 1024 * 1024).default(500 * 1024 * 1024),
-  nudgeOnIdle: z.boolean().default(false),
+  nudge: NudgeSchema.default(() => NudgeSchema.parse({})),
   directory: z.string().optional(),
 })
+
+/**
+ * feishu.json 输入类型（所有字段可选，Zod 填充默认值）
+ * 用于文档和外部类型引用，自动与 schema 同步
+ */
+export type FeishuPluginConfig = z.input<typeof FeishuConfigSchema>
 
 /**
  * 合并默认值后的完整配置（由 FeishuConfigSchema 推导）
