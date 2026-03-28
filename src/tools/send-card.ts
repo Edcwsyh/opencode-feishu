@@ -20,7 +20,9 @@ interface SendCardDeps {
 export function createSendCardTool(deps: SendCardDeps): ToolDefinition {
   return tool({
     description:
-      "发送格式化卡片消息到当前飞书会话。支持 markdown 正文、分割线、备注和交互按钮。" +
+      "发送格式化卡片消息到当前飞书会话。支持 22 种 Card 2.0 组件：" +
+      "markdown 正文、分割线、备注、交互按钮、图片、表格、折叠面板、" +
+      "输入框、下拉选择、日期/时间选择器、复选框、人员选择等。" +
       "按钮点击等同用户发送消息。卡片作为独立消息发送，不影响流式回复。",
     args: {
       title: z.string().describe("卡片标题"),
@@ -226,10 +228,11 @@ export function buildCardFromDSL(
           case "person_list":
             return { tag: "person_list", persons: (s.userIds ?? []).map(id => ({ id })), size: "small" }
           case "image_list":
+            if (!s.imageKeys?.length) return []
             return {
               tag: "img_combination",
               combination_mode: s.layout ?? "bisect",
-              img_list: (s.imageKeys ?? []).map(k => ({ img_key: k })),
+              img_list: s.imageKeys.map(k => ({ img_key: k })),
             }
           case "chart":
             return { tag: "chart", chart_spec: s.chartSpec ?? {} }
