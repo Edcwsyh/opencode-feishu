@@ -74,7 +74,7 @@ export function createSendCardTool(deps: SendCardDeps): ToolDefinition {
             userId: z.string().optional().describe("用户 open_id（person 类型）"),
             userIds: z.array(z.string()).optional().describe("用户 open_id 列表（person_list 类型）"),
             imageKeys: z.array(z.string()).optional().describe("图片 key 列表（image_list 类型）"),
-            layout: z.string().optional().describe("多图布局：bisect/trisect/quadrisect"),
+            layout: z.enum(["bisect", "trisect", "quadrisect"]).optional().describe("多图布局"),
             chartSpec: z.record(z.string(), z.unknown()).optional().describe("图表规格（ECharts 格式）"),
             columns: z
               .array(z.object({ name: z.string(), dataType: z.string().optional() }))
@@ -164,7 +164,7 @@ export type SectionInput = {
   userIds?: string[]
   imageKeys?: string[]
   layout?: string
-  chartSpec?: object
+  chartSpec?: Record<string, unknown>
   columns?: { name: string; dataType?: string }[]
   rows?: Record<string, unknown>[]
   // Interactive
@@ -222,11 +222,14 @@ export function buildCardFromDSL(
               })),
             }
           case "image":
-            return { tag: "img", img_key: s.imageKey ?? "", alt: { tag: "plain_text", content: s.alt ?? "" } }
+            if (!s.imageKey) return []
+            return { tag: "img", img_key: s.imageKey, alt: { tag: "plain_text", content: s.alt ?? "" } }
           case "person":
-            return { tag: "person", user_id: s.userId ?? "" }
+            if (!s.userId) return []
+            return { tag: "person", user_id: s.userId }
           case "person_list":
-            return { tag: "person_list", persons: (s.userIds ?? []).map(id => ({ id })), size: "small" }
+            if (!s.userIds?.length) return []
+            return { tag: "person_list", persons: s.userIds.map(id => ({ id })), size: "small" }
           case "image_list":
             if (!s.imageKeys?.length) return []
             return {
@@ -292,9 +295,10 @@ export function buildCardFromDSL(
               text: { tag: "plain_text", content: s.content ?? "" },
             }
           case "overflow":
+            if (!s.options?.length) return []
             return {
               tag: "overflow",
-              options: (s.options ?? []).map(o => ({ text: { tag: "plain_text", content: o.label }, value: o.value })),
+              options: s.options.map(o => ({ text: { tag: "plain_text", content: o.label }, value: o.value })),
             }
           case "person_picker":
             return {
@@ -315,14 +319,15 @@ export function buildCardFromDSL(
               header: { title: { tag: "plain_text", content: s.title ?? "" } },
               elements: [{ tag: "markdown", content: s.content ?? "" }],
             }
-          case "image_picker":
+          case "image_picker": {
+            const imgOpts = (s.options ?? []).filter(o => o.imageKey)
+            if (!imgOpts.length) return []
             return {
               tag: "select_img",
               name: s.name ?? "img",
-              options: (s.options ?? [])
-                .filter(o => o.imageKey)
-                .map(o => ({ img_key: o.imageKey!, value: o.value })),
+              options: imgOpts.map(o => ({ img_key: o.imageKey!, value: o.value })),
             }
+          }
           case "markdown":
           default:
             return { tag: "markdown", content: s.content ?? "" }
