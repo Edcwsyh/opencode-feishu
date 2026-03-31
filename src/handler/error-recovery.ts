@@ -59,7 +59,7 @@ type PollFn = (
   client: OpencodeClient,
   sessionId: string,
   opts: {
-    timeout: number
+    timeout?: number
     pollInterval: number
     stablePolls: number
     query?: { directory: string }
@@ -78,7 +78,7 @@ export async function tryModelRecovery(params: {
   readonly client: OpencodeClient
   readonly directory?: string
   readonly parts: readonly PromptPart[]
-  readonly timeout: number
+  readonly timeout?: number
   readonly pollInterval: number
   readonly stablePolls: number
   readonly query?: { directory: string }

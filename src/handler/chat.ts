@@ -349,7 +349,7 @@ async function pollForResponse(
   client: OpencodeClient,
   sessionId: string,
   opts: {
-    timeout: number
+    timeout?: number
     pollInterval: number
     stablePolls: number
     query?: { directory: string }
@@ -369,7 +369,7 @@ async function pollForResponse(
   })
 
   try {
-    while (Date.now() - start < timeout) {
+    while (!timeout || Date.now() - start < timeout) {
       if (signal) {
         await abortableSleep(pollInterval, signal)
       } else {

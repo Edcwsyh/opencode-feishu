@@ -31,7 +31,7 @@ const NudgeSchema = z.object({
 export const FeishuConfigSchema = z.object({
   appId: z.string().min(1, "appId 不能为空"),
   appSecret: z.string().min(1, "appSecret 不能为空"),
-  timeout: z.number().int().positive().max(600_000).default(120_000),
+  timeout: z.number().int().positive().optional(),
   thinkingDelay: z.number().int().nonnegative().default(2_500),
   logLevel: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   maxHistoryMessages: z.number().int().positive().max(500).default(200),
