@@ -6,13 +6,13 @@ import type { Agent } from "node:https"
 import { randomUUID } from "node:crypto"
 import * as httpsProxyAgent from "https-proxy-agent"
 import type { FeishuMessageContext, ResolvedConfig, LogFn } from "../types.js"
-
-// 从命名空间导入中提取 HttpsProxyAgent 类（兼容 Bun 和 Node.js 环境）
-const { HttpsProxyAgent } = httpsProxyAgent
 import { type CardActionData, buildCallbackResponse } from "../handler/interactive.js"
 import { isDuplicate } from "./dedup.js"
 import { describeMessageType } from "./content-extractor.js"
 import { isBotMentioned } from "./group-filter.js"
+
+// 兼容 Bun 和 Node.js 的 CJS/ESM interop
+const { HttpsProxyAgent } = httpsProxyAgent
 
 export interface FeishuGatewayOptions {
   config: ResolvedConfig
