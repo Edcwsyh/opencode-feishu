@@ -109,6 +109,13 @@ export function describeMessageType(messageType: string, rawContent: string): st
   }
 }
 
+/** 判断 MIME 是否为文本类型（OpenCode 只对 text/plain 做内联转换） */
+function isTextualMime(mime: string): boolean {
+  if (mime.startsWith("text/")) return true
+  return ["application/json", "application/xml", "application/yaml",
+          "application/javascript", "application/typescript"].includes(mime)
+}
+
 // ── 各类型提取逻辑 ──
 
 function extractText(rawContent: string): PromptPart[] {
@@ -248,7 +255,8 @@ async function extractFile(
     return [{ type: "text", text: formatDownloadFailure(fileName, result, maxResourceSize) }]
   }
 
-  return [{ type: "file", mime: result.resource.mime || mime, url: result.resource.dataUrl, filename: fileName }]
+  const finalMime = isTextualMime(result.resource.mime || mime) ? "text/plain" : (result.resource.mime || mime)
+  return [{ type: "file", mime: finalMime, url: result.resource.dataUrl, filename: fileName }]
 }
 
 async function extractAudio(
