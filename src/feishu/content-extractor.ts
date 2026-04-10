@@ -70,7 +70,7 @@ export async function extractParts(
         parts = [{ type: "text", text: "[分享了一个用户名片]" }]
         break
       case "merge_forward":
-        parts = [{ type: "text", text: "[合并转发消息]" }]
+        parts = await extractMergeForward(feishuClient, messageId, log)
         break
       default:
         parts = [{ type: "text", text: `[不支持的消息类型: ${messageType}]` }]
@@ -138,7 +138,7 @@ export function describeMessageType(messageType: string, rawContent: string, log
     case "share_user":
       return "[用户名片]"
     case "merge_forward":
-      return "[合并转发]"
+      return "[合并转发]（包含多条子消息）"
     default:
       return `[${messageType}]`
   }
@@ -541,5 +541,97 @@ function extractShareChat(rawContent: string, log?: LogFn): PromptPart[] {
       error: err instanceof Error ? err.message : String(err),
     })
     return [{ type: "text", text: "[群分享]" }]
+  }
+}
+
+/**
+ * 解析合并转发消息。
+ *
+ * 合并转发消息需要通过飞书 API 获取子消息列表，
+ * 然后递归提取每条子消息的内容。
+ * 
+ * 注意：飞书 API 不支持下载合并转发消息中的资源文件（图片、文件等），
+ * 因此对于资源类型消息，只能显示占位符文本。
+ * 参考：https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-resource/get
+ */
+async function extractMergeForward(
+  client: InstanceType<typeof Lark.Client>,
+  messageId: string,
+  log: LogFn,
+): Promise<PromptPart[]> {
+  try {
+    // 调用飞书 API 获取消息详情（包含子消息）
+    const resp = await client.im.v1.message.get({
+      path: { message_id: messageId },
+    })
+
+    if (resp.code !== 0 || !resp.data?.items) {
+      log("warn", "获取合并转发消息失败", { messageId, code: resp.code })
+      return [{ type: "text", text: "[合并转发消息]" }]
+    }
+
+    // 过滤出子消息（upper_message_id 等于当前消息 ID）
+    const subMessages = resp.data.items.filter(
+      (item: any) => item.upper_message_id === messageId
+    )
+
+    if (!subMessages.length) {
+      return [{ type: "text", text: "[合并转发消息]" }]
+    }
+
+    // 提取每条子消息的文本内容
+    // 注意：飞书 API 不支持下载合并转发消息中的资源，因此对图片/文件类型只显示占位符
+    const textContents: string[] = []
+
+    for (const subMsg of subMessages) {
+      const subMsgType = subMsg.msg_type as string
+      const subContent = typeof subMsg.body?.content === "string"
+        ? subMsg.body.content
+        : JSON.stringify(subMsg.body?.content ?? {})
+
+      // 对于资源类型消息（图片、文件等），只显示占位符
+      // 因为飞书 API 不支持下载合并转发消息中的资源
+      if (["image", "file", "audio", "media", "sticker"].includes(subMsgType)) {
+        const placeholder = describeMessageType(subMsgType, subContent, log)
+        if (placeholder) textContents.push(placeholder)
+        continue
+      }
+
+      try {
+        // 对于文本、富文本等类型，尝试解析内容
+        // 使用空字符串作为 maxResourceSize 表示不下载资源
+        const subParts = await extractParts(client, messageId, subMsgType, subContent, log, 0)
+        for (const part of subParts) {
+          if (part.type === "text") {
+            textContents.push(part.text)
+          }
+        }
+      } catch (err) {
+        log("warn", "提取子消息内容失败", {
+          messageId: subMsg.message_id,
+          msgType: subMsgType,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        // 降级：添加类型说明
+        textContents.push(`[${subMsgType}消息]`)
+      }
+    }
+
+    // 添加子消息分隔线
+    const result = textContents.filter(t => t.trim())
+    if (result.length === 0) {
+      return [{ type: "text", text: "[合并转发消息]" }]
+    }
+
+    return [
+      { type: "text", text: "[合并转发消息]" },
+      { type: "text", text: result.join("\n---\n") }
+    ]
+  } catch (err) {
+    log("error", "处理合并转发消息失败", {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return [{ type: "text", text: "[合并转发消息]" }]
   }
 }
