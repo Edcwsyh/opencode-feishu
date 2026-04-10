@@ -113,8 +113,8 @@ export function truncateMarkdown(text: string, limit = MAX_CARD_BYTES): string {
 function extractCodeBlocks(text: string): { segments: string[]; codeBlocks: string[] } {
   const segments: string[] = []
   const codeBlocks: string[] = []
-  // 匹配完整的代码块（``` ... ```），非贪婪模式
-  const re = /```[\s\S]*?```/g
+  // 匹配完整代码块时保留 fence 长度，确保 3+ 反引号语法与 closeCodeBlocks 保持一致。
+  const re = /(`{3,})([\s\S]*?)\1/g
   let lastIndex = 0
   let match: RegExpExecArray | null
   // 遍历所有代码块，收集代码块和非代码段
