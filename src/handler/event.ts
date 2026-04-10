@@ -135,13 +135,8 @@ function collectStrings(obj: unknown, out: string[], maxDepth: number): void {
 }
 
 /**
- * 检测错误字段是否包含模型不兼容错误。
- *
- * 双层匹配策略防止再犯：
- * 1. 精确子串：覆盖已知的错误码和格式化字符串
- * 2. 关键词组合：检测 "model" + 否定/不可用语义词，覆盖未知的自然语言变体
+ * 检测 session 历史数据中毒（每次 LLM 调用都会重复触发的错误）。
  */
-/** 检测 session 历史数据中毒（每次 LLM 调用都会重复触发的错误） */
 /**
  * session 历史中毒的高危关键词。
  *
@@ -154,6 +149,17 @@ const SESSION_POISON_PATTERNS = [
 ]
 
 /**
+ * 某些“中毒”错误只会以格式化后的校验异常出现。
+ *
+ * 这些模式不是稳定子串，而是会夹杂字段名、空格或格式化差异，
+ * 因此单独收敛成正则常量，避免散落在判断逻辑里。
+ */
+const SESSION_POISON_REGEX_PATTERNS = [
+  /localshell.*schema/,
+  /zoderror.*local.?shell/,
+]
+
+/**
  * 检测错误字段是否指向“session 历史已经中毒”。
  *
  * 一旦命中，上层会直接 `invalidateSession()` 而不是再尝试模型恢复。
@@ -162,10 +168,17 @@ export function isSessionPoisoned(fields: string[]): boolean {
   return fields.some(f => {
     const l = f.toLowerCase()
     if (SESSION_POISON_PATTERNS.some(p => l.includes(p))) return true
-    return /localshell.*schema|zoderror.*local.?shell/.test(l)
+    return SESSION_POISON_REGEX_PATTERNS.some(pattern => pattern.test(l))
   })
 }
 
+/**
+ * 检测错误字段是否包含模型不兼容错误。
+ *
+ * 双层匹配策略防止再犯：
+ * 1. 精确子串：覆盖已知的错误码和格式化字符串
+ * 2. 关键词组合：检测 "model" + 否定/不可用语义词，覆盖未知的自然语言变体
+ */
 export function isModelError(fields: string[]): boolean {
   const exactPatterns = [
     "model not found", "modelnotfound", "model_not_found",
