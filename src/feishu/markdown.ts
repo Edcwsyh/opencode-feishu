@@ -52,13 +52,13 @@ export function cleanMarkdown(text: string): string {
   // 第二步：先补全未闭合代码块，避免半截代码块被当成普通文本做 HTML 清洗。
   result = closeCodeBlocks(result)
 
-  // 第三步：提取代码块，用 NUL 字符占位，避免代码块中的泛型语法被误删
+  // 第三步：提取代码块，只清洗非代码段，避免代码块里的 HTML/泛型文本被误伤。
   const { segments, codeBlocks } = extractCodeBlocks(result)
-  // 只对非代码段执行 HTML 标签清理
-  result = segments.map(seg => seg.replace(HTML_TAG_RE, "")).join("\0")
-  // 第四步：将 NUL 占位符替换回原始代码块内容
-  let idx = 0
-  result = result.replace(/\0/g, () => codeBlocks[idx++] ?? "")
+  // `segments` 比 `codeBlocks` 总是多一个元素；逐段交替拼接可以避免占位符碰撞。
+  result = segments.reduce((acc, seg, idx) => {
+    const cleanedSegment = seg.replace(HTML_TAG_RE, "")
+    return acc + cleanedSegment + (codeBlocks[idx] ?? "")
+  }, "")
 
   // 第五步：兜底再检查一次，兼容清洗过程中新插入换行后的代码块状态。
   result = closeCodeBlocks(result)

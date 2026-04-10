@@ -15,6 +15,13 @@ const SESSION_CACHE_TTL = 60 * 60 * 1_000
 
 /** 内存会话缓存：sessionKey → { id, title }，1 小时 TTL 自动清理 */
 const sessionCache = new TtlMap<{ id: string; title?: string }>(SESSION_CACHE_TTL)
+/**
+ * 强制新建 session 标记。
+ *
+ * 当上层检测到“历史中毒”后，下一次同一 `sessionKey` 必须跳过标题前缀复用，
+ * 否则可能立刻把刚刚判定为坏的远端 session 又捡回来。
+ */
+const forceCreateSession = new TtlMap<true>(SESSION_CACHE_TTL)
 
 /**
  * 写入本地 session 缓存并刷新 TTL。
@@ -45,10 +52,12 @@ function generateSessionTitle(sessionKey: string): string {
 /**
  * 主动使指定逻辑会话失效。
  *
- * 下次 `getOrCreateSession()` 将重新去 OpenCode 侧查找或创建。
+ * 下次 `getOrCreateSession()` 会跳过远端标题复用并直接创建一条新 session，
+ * 避免“历史中毒”场景下马上复用回同一条坏会话。
  */
 export function invalidateSession(sessionKey: string): void {
   sessionCache.delete(sessionKey)
+  forceCreateSession.set(sessionKey, true)
 }
 
 /**
@@ -64,38 +73,42 @@ export async function getOrCreateSession(
   sessionKey: string,
   directory?: string,
 ): Promise<{ id: string; title?: string }> {
+  // 如果该逻辑会话刚被判定为“必须新建”，则本轮禁止命中任何旧 session。
+  const mustCreateFresh = forceCreateSession.has(sessionKey)
   // 第一层：本地缓存命中时直接返回，避免频繁 list session。
   const cached = sessionCache.get(sessionKey)
-  if (cached) return cached
+  if (cached && !mustCreateFresh) return cached
 
   // 第二层：按标题前缀在远端已有 session 中反查。
   const titlePrefix = `${TITLE_PREFIX}-${sessionKey}-`
 
   const query = directory ? { directory } : undefined
-  try {
-    const { data: sessions } = await client.session.list({ query })
-    if (Array.isArray(sessions)) {
-      // 只保留属于当前逻辑聊天的候选 session。
-      const candidates = sessions.filter(
-        (s) => s.title && s.title.startsWith(titlePrefix),
-      )
-      if (candidates.length > 0) {
-        // 多个候选时，优先复用最近创建的一条，尽量延续最新上下文。
-        candidates.sort((a, b) => {
-          const ca = a.time?.created ?? 0
-          const cb = b.time?.created ?? 0
-          return cb - ca
-        })
-        const best = candidates[0]
-        if (best?.id) {
-          const session = { id: best.id, title: best.title }
-          setCachedSession(sessionKey, session)
-          return session
+  if (!mustCreateFresh) {
+    try {
+      const { data: sessions } = await client.session.list({ query })
+      if (Array.isArray(sessions)) {
+        // 只保留属于当前逻辑聊天的候选 session。
+        const candidates = sessions.filter(
+          (s) => s.title && s.title.startsWith(titlePrefix),
+        )
+        if (candidates.length > 0) {
+          // 多个候选时，优先复用最近创建的一条，尽量延续最新上下文。
+          candidates.sort((a, b) => {
+            const ca = a.time?.created ?? 0
+            const cb = b.time?.created ?? 0
+            return cb - ca
+          })
+          const best = candidates[0]
+          if (best?.id) {
+            const session = { id: best.id, title: best.title }
+            setCachedSession(sessionKey, session)
+            return session
+          }
         }
       }
+    } catch {
+      // list 失败时退回创建新 session，优先保证当前消息链路继续推进。
     }
-  } catch {
-    // list 失败时退回创建新 session，优先保证当前消息链路继续推进。
   }
 
   // 第三层：完全找不到时，创建新 session。
@@ -108,6 +121,8 @@ export async function getOrCreateSession(
     )
   }
   const session = { id: createResp.data.id, title: createResp.data.title }
+  // 一旦成功创建新会话，就清除“强制新建”标记，后续继续允许正常复用最新 session。
+  forceCreateSession.delete(sessionKey)
   setCachedSession(sessionKey, session)
   return session
 }
